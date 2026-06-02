@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VietSuccess — AI Search</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            vs: {
+              bg: '#FBFDFF',
+              panel: '#FFFFFF',
+              panel2: '#F3F8FC',
+              line: '#E1ECF5',
+              text: '#020381',
+              muted: '#4F6882',
+              faint: '#8AA9C5',
+              green: '#0693E3',
+              green2: '#E8F5FE',
+              teal: '#020381',
+              gold: '#B47A20',
+              coral: '#C45A3D'
+            }
+          },
+          fontFamily: { sans: ['Inter', 'sans-serif'] },
+          boxShadow: {
+            soft: '0 18px 50px rgba(2, 3, 129, 0.08)'
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    [x-cloak] { display: none !important; }
+    html, body { height: 100%; }
+    body {
+      background:
+        linear-gradient(180deg, #FFFFFF 0%, #FBFDFF 48%, #F5FAFE 100%);
+      color: #020381;
+      font-family: Inter, sans-serif;
+    }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #D3E7F6; border-radius: 999px; }
+    ::-webkit-scrollbar-thumb:hover { background: #0693E3; }
+
+    input, textarea, select {
+      width: 100%;
+      border: 1px solid #E1ECF5;
+      background: #FFFFFF;
+      color: #020381;
+      border-radius: 10px;
+      outline: none;
+      font-size: 14px;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    textarea { padding: 13px 48px 13px 16px; resize: none; }
+    .prompt-box {
+      background: #FFFFFF;
+      border: 1px solid #E1ECF5;
+      border-radius: 18px;
+      box-shadow: 0 18px 50px rgba(2, 3, 129, 0.08);
+      padding: 10px;
+    }
+    .prompt-box:focus-within {
+      border-color: #0693E3;
+      box-shadow: 0 18px 50px rgba(2, 3, 129, 0.08), 0 0 0 4px rgba(6, 147, 227, .12);
+    }
+    .prompt-input {
+      border: 0;
+      box-shadow: none !important;
+      padding: 10px 8px;
+      min-height: 44px;
+      max-height: 140px;
+      background: transparent;
+      line-height: 1.55;
+    }
+    .prompt-input:focus { border-color: transparent; box-shadow: none; }
+    .attach-item {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-radius: 12px;
+      padding: 10px;
+      color: #020381;
+      font-size: 13px;
+      font-weight: 600;
+      text-align: left;
+      transition: background .15s;
+    }
+    .attach-item:hover { background: #F3F8FC; }
+    .attach-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 11px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    select { padding: 9px 12px; }
+    input:focus, textarea:focus, select:focus {
+      border-color: #0693E3;
+      box-shadow: 0 0 0 3px rgba(6, 147, 227, .16);
+    }
+    input::placeholder, textarea::placeholder { color: #8AA9C5; }
+
+    .panel {
+      background: rgba(255,255,255,.86);
+      border: 1px solid #E1ECF5;
+      box-shadow: 0 18px 50px rgba(2, 3, 129, 0.08);
+    }
+    .icon-btn {
+      width: 38px; height: 38px;
+      display: inline-flex; align-items: center; justify-content: center;
+      border-radius: 12px;
+      border: 1px solid #E1ECF5;
+      background: #FFFFFF;
+      color: #020381;
+      transition: background .15s, transform .15s, border-color .15s;
+    }
+    .icon-btn:hover { background: #F3F8FC; border-color: #8ED1FC; }
+    .primary {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      background: linear-gradient(135deg, #020381 0%, #0693E3 100%);
+      color: #FFFFFF;
+      border-radius: 10px;
+      font-weight: 700;
+      font-size: 13px;
+      padding: 10px 14px;
+      transition: opacity .15s, transform .15s;
+    }
+    .primary:hover { opacity: .92; }
+    .primary:disabled { opacity: .45; cursor: not-allowed; }
+    .ghost {
+      display: inline-flex; align-items: center; gap: 8px;
+      border: 1px solid #E1ECF5;
+      background: #FFFFFF;
+      color: #020381;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 9px 12px;
+    }
+    .ghost:hover { background: #F3F8FC; }
+    .conversation {
+      display: block;
+      width: 100%;
+      text-align: left;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 13px;
+      color: #4F6882;
+      transition: background .15s, color .15s;
+    }
+    .conversation:hover { background: #F3F8FC; color: #020381; }
+    .conversation.active { background: #EEF6FD; color: #020381; font-weight: 700; }
+    .new-chat-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      background: #020381;
+      color: #FFFFFF;
+      border-radius: 12px;
+      font-weight: 800;
+      font-size: 13px;
+      padding: 11px 14px;
+      transition: background .15s, transform .15s;
+    }
+    .new-chat-btn:hover { background: #0305A6; }
+    .bubble-user {
+      background: #020381;
+      border: 1px solid #020381;
+      color: #FFFFFF;
+      border-radius: 18px 18px 6px 18px;
+      padding: 12px 15px;
+      max-width: min(680px, 82%);
+      line-height: 1.55;
+      font-size: 14px;
+      box-shadow: 0 8px 30px rgba(2, 3, 129, .06);
+    }
+    .bubble-ai {
+      background: #FFFFFF;
+      border: 1px solid #E1ECF5;
+      color: #020381;
+      border-radius: 18px 18px 18px 6px;
+      padding: 13px 15px;
+      max-width: min(760px, 88%);
+      line-height: 1.6;
+      font-size: 14px;
+      box-shadow: 0 8px 30px rgba(2, 3, 129, .06);
+    }
+    .result-card {
+      background: #FBFDFF;
+      border: 1px solid #E1ECF5;
+      border-radius: 12px;
+      padding: 12px;
+      transition: border-color .15s, background .15s;
+    }
+    .result-card:hover { border-color: #0693E3; background: #FFFFFF; }
+    .badge {
+      display: inline-flex; align-items: center;
+      border-radius: 999px;
+      padding: 3px 9px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .fade-in { animation: fadeIn .22s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    @keyframes pulseDot { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+    .typing-dot { width: 6px; height: 6px; border-radius: 50%; background: #8AA9C5; animation: pulseDot 1.2s ease infinite; }
+    .typing-dot:nth-child(2) { animation-delay: .18s; }
+    .typing-dot:nth-child(3) { animation-delay: .36s; }
+  </style>
+</head>
+
+<body x-data="app()" x-init="init()" x-cloak class="h-screen overflow-hidden">
+  <div class="flex h-full">
+    <!-- Conversation rail: only chat names, not app navigation -->
+    <aside class="hidden md:flex w-72 flex-col border-r border-vs-line bg-[#FBFDFF]">
+      <div class="h-20 px-4 flex items-center border-b border-vs-line">
+        <div class="flex items-center gap-3">
+          <img class="w-11 h-11 rounded-2xl object-cover shadow-soft border border-vs-line" src="public/571229234_1519256109878166_628837367939756585_n.jpg" alt="VietSuccess logo" />
+          <div class="min-w-0">
+            <div class="font-extrabold text-vs-text tracking-[-0.03em]">VietSuccess AI Search</div>
+            <div class="text-xs text-vs-muted mt-0.5">Content intelligence workspace</div>
+          </div>
+        </div>
+      </div>
+      <div class="flex-1 overflow-y-auto p-3 space-y-1">
+        <template x-for="c in conversations" :key="c.id">
+          <button class="conversation" :class="currentConversationId===c.id ? 'active' : ''" @click="selectConversation(c.id)">
+            <div class="truncate" x-text="c.title"></div>
+            <div class="text-[11px] mt-1 opacity-70" x-text="c.messages.length + ' tin nhắn'"></div>
+          </button>
+        </template>
+      </div>
+      <div class="p-4">
+        <button class="new-chat-btn" @click="newConversation()">
+          <span>+</span>
+          Cuộc hội thoại mới
+        </button>
+      </div>
+      <div class="p-4 border-t border-vs-line">
+        <div class="relative" @click.outside="avatarOpen=false">
+          <button class="w-full flex items-center gap-3 text-left rounded-2xl p-2 hover:bg-vs-panel2 transition-colors" @click="avatarOpen=!avatarOpen">
+            <img class="w-10 h-10 rounded-full object-cover border border-vs-line flex-shrink-0" src="public/571229234_1519256109878166_628837367939756585_n.jpg" alt="VietSuccess AI" />
+            <div class="min-w-0 flex-1">
+              <div class="text-[11px] uppercase tracking-[0.16em] text-vs-faint font-bold">VietSuccess AI</div>
+            </div>
+            <svg class="text-vs-faint flex-shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <div x-show="avatarOpen" x-transition class="absolute left-2 right-2 bottom-full mb-3 panel rounded-2xl p-2 z-50">
+            <button class="conversation" @click="setView('chat')">AI Search</button>
+            <button class="conversation" @click="setView('videos')">Kho video</button>
+            <button class="conversation" @click="setView('dashboard')">Dashboard</button>
+            <button class="conversation" @click="setView('upload')">Upload video</button>
+            <div class="border-t border-vs-line my-2"></div>
+            <button class="conversation" @click="showToast('Settings sẽ được nối ở bước sau'); avatarOpen=false">Cài đặt</button>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="flex-1 flex flex-col min-w-0">
+      <!-- Top bar -->
+      <header class="h-20 px-4 md:px-6 flex items-center justify-between border-b border-vs-line bg-white/70 backdrop-blur">
+        <div></div>
+
+        <div class="md:hidden">
+          <button class="icon-btn" @click="setView('videos')" title="Kho video">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3V9Z"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- Mobile conversation selector -->
+      <div class="md:hidden px-4 py-3 border-b border-vs-line bg-white/70" x-show="view==='chat'">
+        <select x-model="currentConversationId" @change="selectConversation(currentConversationId)">
+          <template x-for="c in conversations" :key="c.id">
+            <option :value="c.id" x-text="c.title"></option>
+          </template>
+        </select>
+      </div>
+
+      <!-- Chat screen -->
+      <section x-show="view==='chat'" class="flex-1 flex flex-col min-h-0 fade-in">
+        <div class="flex-1 overflow-y-auto px-4 md:px-8 py-7" x-ref="chatMessages">
+          <div class="max-w-4xl mx-auto space-y-5">
+            <div x-show="activeMessages().length===0" class="min-h-[58vh] flex flex-col items-center justify-center text-center">
+              <div class="w-16 h-16 rounded-3xl bg-vs-green2 text-vs-green flex items-center justify-center mb-5">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg>
+              </div>
+              <h1 class="text-2xl md:text-3xl font-extrabold tracking-[-0.03em] text-vs-text">Hỏi video như hỏi một người biên tập</h1>
+              <p class="mt-3 text-vs-muted max-w-xl">Tìm đoạn nói về chủ đề, nhân vật, quan điểm, cảm xúc, khoảnh khắc hay câu quote trong kho nội dung VietSuccess.</p>
+              <div class="grid md:grid-cols-2 gap-3 mt-7 w-full max-w-2xl">
+                <template x-for="q in suggestedQueries" :key="q">
+                  <button class="result-card text-left text-sm text-vs-text" @click="chatInput=q; sendChat()" x-text="q"></button>
+                </template>
+              </div>
+            </div>
+
+            <template x-for="(msg, i) in activeMessages()" :key="i">
+              <div class="flex" :class="msg.role==='user' ? 'justify-end' : 'justify-start'">
+                <img x-show="msg.role==='assistant'" class="w-8 h-8 rounded-full object-cover border border-vs-line flex-shrink-0 mr-2 mt-1" src="public/571229234_1519256109878166_628837367939756585_n.jpg" alt="VietSuccess AI" />
+                <div :class="msg.role==='user' ? 'bubble-user' : 'bubble-ai'">
+                  <div x-text="msg.content" class="whitespace-pre-wrap"></div>
+                  <div x-show="msg.results && msg.results.length" class="mt-3 space-y-2">
+                    <template x-for="(r, ri) in msg.results" :key="ri">
+                      <button class="result-card w-full text-left" @click="openDetail(r.video_id)">
+                        <div class="flex items-start justify-between gap-3">
+                          <div class="min-w-0">
+                            <div class="font-bold text-sm text-vs-text truncate" x-text="r.speaker_name || 'Speaker chưa đặt tên'"></div>
+                            <div class="text-xs text-vs-muted truncate mt-0.5" x-text="r.video_title"></div>
+                          </div>
+                          <span class="badge bg-vs-green2 text-vs-green" x-text="(r.score*100).toFixed(0)+'%'"></span>
+                        </div>
+                        <div class="text-sm text-vs-muted mt-2 line-clamp-2" x-text="r.transcript"></div>
+                        <div class="text-xs font-mono text-vs-teal mt-2" x-text="formatMs(r.start_ms) + ' → ' + formatMs(r.end_ms)"></div>
+                      </button>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <div x-show="chatLoading" class="flex justify-start">
+              <img class="w-8 h-8 rounded-full object-cover border border-vs-line flex-shrink-0 mr-2" src="public/571229234_1519256109878166_628837367939756585_n.jpg" alt="VietSuccess AI" />
+              <div class="bubble-ai flex items-center gap-2">
+                <span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="px-4 md:px-8 pb-5 bg-gradient-to-t from-vs-bg via-vs-bg to-transparent">
+          <div class="max-w-4xl mx-auto">
+            
+            <div class="prompt-box">
+              <div class="flex items-end gap-2">
+                <div class="relative flex-shrink-0 mb-1" @click.outside="attachOpen=false">
+                  <button class="icon-btn" @click="attachOpen=!attachOpen" title="Đính kèm">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+                  </button>
+                  <div x-show="attachOpen" x-transition class="absolute left-0 bottom-full mb-3 w-80 panel rounded-2xl p-2 z-50">
+                    <button class="attach-item" @click="attachOpen=false; $refs.chatAttachmentInput.click()">
+                      <span class="attach-icon bg-[#E7F0FA] text-[#0E5FA8]">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v6h6"/><path d="M8 14h8"/><path d="M8 18h5"/></svg>
+                      </span>
+                      <span>
+                        <span class="block">Thêm ảnh và tệp</span>
+                        <span class="block text-xs font-normal text-vs-muted">Tệp có thể là video, ảnh, PDF, docs</span>
+                      </span>
+                    </button>
+
+                    <div class="border-t border-vs-line my-2"></div>
+                    <div class="px-2 py-1 text-[11px] uppercase tracking-[0.14em] text-vs-faint font-bold">Tệp gần đây</div>
+                    <template x-if="recentFiles.length===0">
+                      <div class="px-2 py-3 text-xs text-vs-muted">Chưa có tệp gần đây.</div>
+                    </template>
+                    <template x-for="f in recentFiles" :key="f.id">
+                      <button class="attach-item" @click="useRecentFile(f)">
+                        <span class="attach-icon" :class="f.type==='video' ? 'bg-vs-green2 text-vs-green' : (f.type==='image' ? 'bg-[#E7F0FA] text-[#0E5FA8]' : 'bg-[#FFF3D8] text-vs-gold')">
+                          <span x-text="f.type==='video' ? '▶' : (f.type==='image' ? '□' : '↗')"></span>
+                        </span>
+                        <span class="min-w-0">
+                          <span class="block truncate" x-text="f.name"></span>
+                          <span class="block text-xs font-normal text-vs-muted" x-text="f.meta"></span>
+                        </span>
+                      </button>
+                    </template>
+                  </div>
+                </div>
+                <textarea
+                  x-model="chatInput"
+                  @keydown.enter.prevent="if(!$event.shiftKey) sendChat()"
+                  rows="1"
+                  placeholder="Hỏi về một đoạn video, speaker, chủ đề hoặc khoảnh khắc..."
+                  class="prompt-input flex-1"
+                ></textarea>
+                <button class="w-10 h-10 rounded-xl bg-vs-text text-white flex items-center justify-center disabled:opacity-40 flex-shrink-0 mb-1 hover:bg-[#0305A6] transition-colors" @click="sendChat()" :disabled="chatLoading || !chatInput.trim()" title="Gửi">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4 20-7Z"/></svg>
+                </button>
+              </div>
+              <div class="flex items-center justify-between gap-3 px-1 pt-2 text-[11px] text-vs-faint">
+                <span x-text="uploading ? 'Đang upload video... ' + uploadProgress + '%' : 'Enter để gửi · Shift Enter để xuống dòng'"></span>
+                <span x-show="chatVideoId" class="truncate">Đang giới hạn trong một video</span>
+              </div>
+              <input type="file" x-ref="chatAttachmentInput" class="hidden" @change="handleChatAttachment($event)" />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Video library -->
+      <section x-show="view==='videos'" class="flex-1 overflow-y-auto p-4 md:p-8 fade-in">
+        <div class="max-w-5xl mx-auto">
+          <div class="flex items-center justify-between gap-3 mb-5">
+            <div>
+              <h1 class="text-2xl font-extrabold tracking-[-0.03em]">Kho video</h1>
+              <p class="text-sm text-vs-muted mt-1">Các video đã ingest và trạng thái pipeline.</p>
+            </div>
+            <button class="primary" @click="setView('upload')">Upload</button>
+          </div>
+          <div class="panel rounded-2xl overflow-hidden">
+            <template x-if="!videos.length">
+              <div class="p-8 text-center text-vs-muted">Chưa có video hoặc API chưa chạy.</div>
+            </template>
+            <template x-for="v in videos" :key="v.id">
+              <div class="p-4 border-b border-vs-line last:border-b-0 flex items-start justify-between gap-4">
+                <div class="min-w-0">
+                  <div class="font-bold truncate" x-text="compactTitle(v, 90)"></div>
+                  <div class="text-xs text-vs-muted mt-1 font-mono" x-text="v.id"></div>
+                </div>
+                <div class="flex items-center gap-2 flex-shrink-0">
+                  <span x-html="statusBadge(v.status)"></span>
+                  <button class="ghost" @click="chatVideoId=v.id; setView('chat')">Hỏi video</button>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </section>
+
+      <!-- Dashboard -->
+      <section x-show="view==='dashboard'" class="flex-1 overflow-y-auto p-4 md:p-8 fade-in">
+        <div class="max-w-5xl mx-auto">
+          <h1 class="text-2xl font-extrabold tracking-[-0.03em]">Dashboard</h1>
+          <p class="text-sm text-vs-muted mt-1">Tổng quan nhanh cho POC VietSuccess.</p>
+          <div class="grid md:grid-cols-4 gap-4 mt-6">
+            <template x-for="item in dashboardCards()" :key="item.label">
+              <div class="panel rounded-2xl p-5">
+                <div class="text-xs uppercase tracking-[0.14em] text-vs-faint font-bold" x-text="item.label"></div>
+                <div class="text-3xl font-extrabold mt-3" x-text="item.value"></div>
+                <div class="text-sm text-vs-muted mt-2" x-text="item.sub"></div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </section>
+
+      <!-- Upload -->
+      <section x-show="view==='upload'" class="flex-1 overflow-y-auto p-4 md:p-8 fade-in">
+        <div class="max-w-2xl mx-auto">
+          <h1 class="text-2xl font-extrabold tracking-[-0.03em]">Upload video</h1>
+          <p class="text-sm text-vs-muted mt-1">Upload file để backend chạy pipeline.</p>
+
+          <div class="panel rounded-2xl mt-6 p-8 text-center cursor-pointer border-dashed"
+               :class="dragging ? 'ring-4 ring-vs-green2' : ''"
+               @dragover.prevent="dragging=true"
+               @dragleave="dragging=false"
+               @drop.prevent="handleDrop($event)"
+               @click="$refs.fileInput.click()">
+            <div class="w-14 h-14 rounded-3xl bg-vs-green2 text-vs-green flex items-center justify-center mx-auto mb-4">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></svg>
+            </div>
+            <div class="font-bold" x-text="uploadFile ? uploadFile.name : 'Kéo thả video vào đây'"></div>
+            <div class="text-sm text-vs-muted mt-1" x-text="uploadFile ? formatSize(uploadFile.size) : 'MP4, WebM, MOV · tối đa 2GB'"></div>
+          </div>
+          <input type="file" x-ref="fileInput" accept="video/*" class="hidden" @change="handleFileSelect($event)" />
+
+          <div x-show="uploading" class="panel rounded-2xl p-4 mt-4">
+            <div class="flex justify-between text-sm mb-2"><span>Đang upload</span><span x-text="uploadProgress + '%'"></span></div>
+            <div class="h-2 rounded-full bg-vs-panel2 overflow-hidden"><div class="h-full bg-vs-green" :style="'width:'+uploadProgress+'%'"></div></div>
+          </div>
+
+          <div x-show="uploadResult" class="panel rounded-2xl p-4 mt-4 border-vs-green">
+            <div class="font-bold text-vs-green">Upload thành công</div>
+            <div class="text-xs font-mono text-vs-muted mt-2" x-text="'ID: ' + uploadResult?.video_id"></div>
+          </div>
+
+          <div class="flex gap-3 mt-4">
+            <button class="primary" @click="doUpload()" :disabled="!uploadFile || uploading">Bắt đầu pipeline</button>
+            <button class="ghost" @click="uploadFile=null; uploadResult=null">Huỷ</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Detail overlay -->
+  <div x-show="detailOpen" x-transition class="fixed inset-0 bg-vs-text/30 z-40" @click="detailOpen=false"></div>
+  <aside x-show="detailOpen" x-transition class="fixed right-0 top-0 bottom-0 w-full max-w-md bg-white z-50 shadow-soft border-l border-vs-line p-5 overflow-y-auto">
+    <div class="flex items-center justify-between">
+      <div class="font-extrabold">Chi tiết video</div>
+      <button class="icon-btn" @click="detailOpen=false">×</button>
+    </div>
+    <template x-if="detail">
+      <div class="mt-5 space-y-4">
+        <div>
+          <div class="text-xs uppercase tracking-[0.14em] text-vs-faint font-bold">Video</div>
+          <div class="font-bold mt-1" x-text="detail.filename"></div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div class="bg-vs-panel2 rounded-xl p-3">
+            <div class="text-xs text-vs-muted">Status</div>
+            <div class="mt-1" x-html="statusBadge(detail.status)"></div>
+          </div>
+          <div class="bg-vs-panel2 rounded-xl p-3">
+            <div class="text-xs text-vs-muted">Speakers</div>
+            <div class="font-bold mt-1" x-text="detail.speakers?.length || 0"></div>
+          </div>
+        </div>
+        <template x-if="detail.speakers && detail.speakers.length">
+          <div>
+            <div class="text-xs uppercase tracking-[0.14em] text-vs-faint font-bold mb-2">Speakers</div>
+            <template x-for="s in detail.speakers" :key="s.id">
+              <div class="border border-vs-line rounded-xl p-3 mb-2">
+                <div class="font-bold text-sm" x-text="s.display_name || s.label"></div>
+                <div class="text-xs text-vs-muted" x-text="s.mapping_status"></div>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
+    </template>
+  </aside>
+
+  <div x-show="toast.show" x-transition class="fixed bottom-5 right-5 z-50 panel rounded-2xl px-4 py-3 text-sm flex items-center gap-3">
+    <span class="w-2 h-2 rounded-full" :class="toast.type==='success' ? 'bg-vs-green' : 'bg-vs-coral'"></span>
+    <span x-text="toast.message"></span>
+  </div>
+
+<script>
+const API = 'http://localhost:8000';
+
+function app() {
+  return {
+    view: 'chat',
+    avatarOpen: false,
+    videos: [],
+    loadingVideos: false,
+
+    conversations: [],
+    currentConversationId: null,
+    chatInput: '',
+    chatLoading: false,
+    chatVideoId: '',
+    attachOpen: false,
+    recentFiles: [],
+    suggestedQueries: [
+      'A nói gì về cách kiếm tiền?',
+      'Tìm đoạn khách mời nói về vượt qua áp lực',
+      'Có câu nào hay về học ngoại ngữ không?',
+      'Tóm tắt những khoảnh khắc đáng cắt clip'
+    ],
+
+    uploadFile: null,
+    uploading: false,
+    uploadProgress: 0,
+    uploadResult: null,
+    dragging: false,
+
+    detailOpen: false,
+    detail: null,
+    toast: { show: false, message: '', type: 'success' },
+
+    async init() {
+      this.conversations = [
+        { id: crypto.randomUUID(), title: 'Tìm đoạn A nói về kiếm tiền', messages: [] },
+        { id: crypto.randomUUID(), title: 'Ý chính của cuộc trò chuyện', messages: [] }
+      ];
+      this.currentConversationId = this.conversations[0].id;
+      await this.loadVideos();
+    },
+
+    setView(view) {
+      this.view = view;
+      this.avatarOpen = false;
+      if (view === 'videos' || view === 'dashboard') this.loadVideos();
+    },
+
+    screenTitle() {
+      const map = {
+        chat: 'AI Search',
+        videos: 'Kho video',
+        dashboard: 'Dashboard',
+        upload: 'Upload video'
+      };
+      return map[this.view] || 'AI Search';
+    },
+
+    activeConversation() {
+      return this.conversations.find(c => c.id === this.currentConversationId) || this.conversations[0];
+    },
+
+    activeMessages() {
+      return this.activeConversation()?.messages || [];
+    },
+
+    newConversation() {
+      const c = { id: crypto.randomUUID(), title: 'Cuộc hội thoại mới', messages: [] };
+      this.conversations.unshift(c);
+      this.currentConversationId = c.id;
+      this.view = 'chat';
+    },
+
+    selectConversation(id) {
+      this.currentConversationId = id;
+      this.view = 'chat';
+      this.$nextTick(() => this.scrollChat());
+    },
+
+    async loadVideos() {
+      this.loadingVideos = true;
+      try {
+        const r = await fetch(`${API}/videos`);
+        const data = await r.json();
+        this.videos = data.items || [];
+      } catch (e) {
+        this.showToast('Không thể kết nối API', 'error');
+      } finally {
+        this.loadingVideos = false;
+      }
+    },
+
+    async sendChat() {
+      const q = this.chatInput.trim();
+      if (!q || this.chatLoading) return;
+      const conv = this.activeConversation();
+      if (conv.title === 'Cuộc hội thoại mới' || conv.messages.length === 0) {
+        conv.title = q.length > 34 ? q.slice(0, 34) + '...' : q;
+      }
+      conv.messages.push({ role: 'user', content: q });
+      this.chatInput = '';
+      this.chatLoading = true;
+      this.$nextTick(() => this.scrollChat());
+
+      try {
+        const url = new URL(`${API}/search`);
+        url.searchParams.set('q', q);
+        url.searchParams.set('limit', '5');
+        if (this.chatVideoId) url.searchParams.set('video_id', this.chatVideoId);
+        const r = await fetch(url);
+        const data = await r.json();
+        const results = data.results || [];
+        conv.messages.push({
+          role: 'assistant',
+          content: results.length ? `Mình tìm thấy ${results.length} đoạn gần nhất:` : 'Chưa tìm thấy đoạn phù hợp trong kho video.',
+          results
+        });
+      } catch (e) {
+        conv.messages.push({ role: 'assistant', content: 'Backend chưa phản hồi. Kiểm tra API server ở localhost:8000 nhé.', results: [] });
+      } finally {
+        this.chatLoading = false;
+        this.$nextTick(() => this.scrollChat());
+      }
+    },
+
+    scrollChat() {
+      const el = this.$refs.chatMessages;
+      if (el) el.scrollTop = el.scrollHeight;
+    },
+
+    handleDrop(e) {
+      this.dragging = false;
+      const f = e.dataTransfer.files[0];
+      if (f && f.type.startsWith('video/')) {
+        this.uploadFile = f;
+        this.uploadResult = null;
+      }
+    },
+
+    handleFileSelect(e) {
+      this.uploadFile = e.target.files[0] || null;
+      this.uploadResult = null;
+    },
+
+    async handleChatAttachment(e) {
+      const file = e.target.files[0] || null;
+      e.target.value = '';
+      if (!file) return;
+
+      if (file.type.startsWith('video/')) {
+        await this.handleChatVideoUpload(file);
+        return;
+      }
+
+      const type = file.type.startsWith('image/') ? 'image' : 'file';
+      this.addRecentFile(file, type, `${type === 'image' ? 'Ảnh' : 'Tệp'} · ${this.formatSize(file.size)}`);
+      const conv = this.activeConversation();
+      conv.messages.push({
+        role: 'assistant',
+        content: `Đã thêm "${file.name}" vào tệp gần đây. Video sẽ được xử lý pipeline; ảnh/tệp thường hiện được dùng như attachment tham chiếu.`,
+        results: []
+      });
+      this.showToast('Đã thêm vào tệp gần đây');
+      this.$nextTick(() => this.scrollChat());
+    },
+
+    async handleChatVideoUpload(file) {
+      this.uploadFile = file;
+      this.uploadResult = null;
+      await this.doUpload();
+      if (this.uploadResult?.video_id) {
+        this.chatVideoId = this.uploadResult.video_id;
+        this.addRecentFile(file, 'video', `Video · ${this.formatSize(file.size)}`);
+        const conv = this.activeConversation();
+        conv.messages.push({
+          role: 'assistant',
+          content: `Đã upload "${file.name}". Pipeline đang chạy nền; khi video sẵn sàng, bạn có thể hỏi trực tiếp trong cuộc hội thoại này.`,
+          results: []
+        });
+        this.$nextTick(() => this.scrollChat());
+      }
+    },
+
+    addRecentFile(file, type, meta) {
+      this.recentFiles = [
+        {
+          id: crypto.randomUUID(),
+          name: file.name,
+          type,
+          meta,
+          size: file.size,
+          addedAt: new Date().toISOString()
+        },
+        ...this.recentFiles
+      ].slice(0, 6);
+    },
+
+    useRecentFile(file) {
+      this.attachOpen = false;
+      this.chatInput = this.chatInput
+        ? `${this.chatInput} ${file.name}`
+        : `Dùng tệp "${file.name}" để tìm nội dung liên quan`;
+    },
+
+    async doUpload() {
+      if (!this.uploadFile) return;
+      this.uploading = true;
+      this.uploadProgress = 0;
+      const fd = new FormData();
+      fd.append('file', this.uploadFile);
+      try {
+        const xhr = new XMLHttpRequest();
+        xhr.upload.addEventListener('progress', e => {
+          if (e.lengthComputable) this.uploadProgress = Math.round(e.loaded / e.total * 90);
+        });
+        await new Promise((res, rej) => {
+          xhr.open('POST', `${API}/videos/upload`);
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) res(xhr);
+            else rej(new Error(xhr.responseText));
+          };
+          xhr.onerror = rej;
+          xhr.send(fd);
+        });
+        this.uploadProgress = 100;
+        this.uploadResult = JSON.parse(xhr.responseText);
+        this.showToast('Upload thành công');
+        await this.loadVideos();
+      } catch (e) {
+        this.showToast('Upload thất bại', 'error');
+      } finally {
+        this.uploading = false;
+      }
+    },
+
+    async openDetail(id) {
+      this.detailOpen = true;
+      this.detail = null;
+      try {
+        const r = await fetch(`${API}/videos/${id}`);
+        this.detail = await r.json();
+      } catch (e) {
+        this.showToast('Không thể tải chi tiết video', 'error');
+      }
+    },
+
+    dashboardCards() {
+      const total = this.videos.length;
+      const ready = this.videos.filter(v => v.status === 'ready').length;
+      const processing = this.videos.filter(v => !['ready', 'error', 'duplicate'].includes(v.status)).length;
+      const duplicate = this.videos.filter(v => v.status === 'duplicate').length;
+      return [
+        { label: 'Videos', value: total, sub: 'Trong kho nội dung' },
+        { label: 'Ready', value: ready, sub: 'Có thể search' },
+        { label: 'Processing', value: processing, sub: 'Đang chạy pipeline' },
+        { label: 'Duplicate', value: duplicate, sub: 'Đã skip xử lý lại' }
+      ];
+    },
+
+    compactTitle(v, n = 44) {
+      const t = v.title || v.original_filename || 'Untitled video';
+      return t.length > n ? t.slice(0, n) + '...' : t;
+    },
+
+    statusBadge(status) {
+      const map = {
+        ready: ['#EAF7FF', '#0693E3', 'Ready'],
+        uploaded: ['#E7F0FA', '#0E5FA8', 'Uploaded'],
+        normalizing: ['#FFF3D8', '#B47A20', 'Normalizing'],
+        transcribing: ['#FFF3D8', '#B47A20', 'Transcribing'],
+        diarizing: ['#FFF3D8', '#B47A20', 'Diarizing'],
+        chunking: ['#FFF3D8', '#B47A20', 'Chunking'],
+        embedding: ['#FFF3D8', '#B47A20', 'Embedding'],
+        quality_check: ['#FFF3D8', '#B47A20', 'QC'],
+        ready_for_chunking: ['#E7F0FA', '#0E5FA8', 'Phase 2'],
+        ready_for_embedding: ['#E7F0FA', '#0E5FA8', 'Phase 3'],
+        duplicate: ['#EEF8FF', '#4F6882', 'Duplicate'],
+        error: ['#FBE4DE', '#C45A3D', 'Error']
+      };
+      const [bg, color, label] = map[status] || ['#EEF8FF', '#4F6882', status || 'Unknown'];
+      return `<span class="badge" style="background:${bg};color:${color}">${label}</span>`;
+    },
+
+    formatMs(ms) {
+      if (!ms && ms !== 0) return '—';
+      const s = Math.floor(ms / 1000);
+      const m = Math.floor(s / 60);
+      const h = Math.floor(m / 60);
+      return h > 0
+        ? `${h}:${String(m % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+        : `${m}:${String(s % 60).padStart(2, '0')}`;
+    },
+
+    formatSize(bytes) {
+      if (!bytes) return '0 KB';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+      return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+    },
+
+    showToast(message, type = 'success') {
+      this.toast = { show: true, message, type };
+      setTimeout(() => this.toast.show = false, 3000);
+    }
+  }
+}
+</script>
+</body>
+</html>
