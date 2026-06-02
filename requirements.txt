@@ -1,0 +1,36 @@
+# ── Web framework ────────────────────────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+
+# ── Database ─────────────────────────────────────────────────────────────────
+sqlalchemy>=2.0.30
+psycopg2-binary>=2.9.9
+alembic>=1.13.1
+pgvector>=0.3.0
+
+# ── Object storage ───────────────────────────────────────────────────────────
+minio>=7.2.7
+
+# ── AI / ML ──────────────────────────────────────────────────────────────────
+openai>=1.30.0
+# Whisper — mlx backend (Apple Silicon, uses Metal GPU — primary)
+mlx-whisper>=0.4.0
+# Whisper — CPU fallback
+faster-whisper>=1.1.0
+pyannote.audio>=3.1.1
+torch>=2.2.0
+torchaudio>=2.2.0
+
+# ── Audio processing ─────────────────────────────────────────────────────────
+ffmpeg-python>=0.2.0
+
+# ── Config & utilities ───────────────────────────────────────────────────────
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+python-dotenv>=1.0.1
+httpx>=0.27.0
+
+# ── Dev / testing ────────────────────────────────────────────────────────────
+pytest>=8.2.0
+pytest-asyncio>=0.23.7
+ruff>=0.4.7
