@@ -1,33 +1,106 @@
-"""Phase 1 — Step 4: speaker diarization via pyannote."""
+"""
+Phase 1 — Step 4: Speaker diarization via pyannote.audio 3.x.
+
+Requirements:
+  1. pip install pyannote.audio torch
+  2. Accept model license on HuggingFace (free):
+       https://hf.co/pyannote/speaker-diarization-3.1   ← accept
+       https://hf.co/pyannote/segmentation-3.0          ← accept
+  3. Create read token at https://hf.co/settings/tokens
+  4. Set PYANNOTE_AUTH_TOKEN=hf_xxxx in .env
+
+Apple M-series: pipeline auto-uses MPS (Metal GPU) for ~3-5x speedup vs CPU.
+"""
+from __future__ import annotations
+
+import logging
 from typing import Any
 
 from src.config import settings
 
+log = logging.getLogger(__name__)
 
-def diarize(wav_path: str) -> list[dict[str, Any]]:
+
+def diarize(
+    wav_path: str,
+    num_speakers: int | None = None,
+    min_speakers: int | None = None,
+    max_speakers: int | None = None,
+) -> list[dict[str, Any]]:
     """
-    Run pyannote diarization. Requires PYANNOTE_AUTH_TOKEN.
-    Returns raw turns: [{speaker, start_ms, end_ms, text=""}]
+    Run pyannote 3.1 diarization on a WAV file.
+
+    Args:
+        wav_path:     Path to 16kHz mono WAV file.
+        num_speakers: If known, pass exact count for better accuracy.
+                      None = auto-detect.
+
+    Returns:
+        Raw turns sorted by start time: [{speaker, start_ms, end_ms}]
     """
     if not settings.pyannote_auth_token:
-        raise ValueError("PYANNOTE_AUTH_TOKEN is not set in .env")
+        raise ValueError(
+            "PYANNOTE_AUTH_TOKEN not set.\n"
+            "Setup:\n"
+            "  1. Accept: https://hf.co/pyannote/speaker-diarization-3.1\n"
+            "  2. Accept: https://hf.co/pyannote/segmentation-3.0\n"
+            "  3. Token:  https://hf.co/settings/tokens\n"
+            "  4. .env:   PYANNOTE_AUTH_TOKEN=hf_xxxx"
+        )
 
+    import torch
+    from huggingface_hub import login
     from pyannote.audio import Pipeline
 
-    pipeline = Pipeline.from_pretrained(
-        "pyannote/speaker-diarization-3.1",
-        use_auth_token=settings.pyannote_auth_token,
-    )
-    diarization = pipeline(wav_path)
+    # PyTorch 2.6 changed weights_only default to True — pyannote checkpoints need False
+    # Safe: pyannote models are from HuggingFace, not user-supplied files
+    _orig_load = torch.load
+    torch.load = lambda *args, **kwargs: _orig_load(*args, **{**kwargs, "weights_only": False})
+
+    # Login globally — works with all pyannote/huggingface_hub version combos
+    login(token=settings.pyannote_auth_token, add_to_git_credential=False)
+
+    try:
+        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1")
+    finally:
+        torch.load = _orig_load  # restore original after loading
+
+    # Apple M-series: use Metal GPU (MPS) — ~3-5x faster than CPU
+    if torch.backends.mps.is_available():
+        pipeline.to(torch.device("mps"))
+        log.info("pyannote: using MPS (Apple Metal GPU)")
+    elif torch.cuda.is_available():
+        pipeline.to(torch.device("cuda"))
+        log.info("pyannote: using CUDA")
+    else:
+        log.info("pyannote: using CPU")
+
+    # Run diarization — constrain speaker count to reduce over-segmentation
+    kwargs: dict = {}
+    if num_speakers:
+        kwargs["num_speakers"] = num_speakers
+        log.info("pyannote: forcing num_speakers=%d", num_speakers)
+    else:
+        if min_speakers:
+            kwargs["min_speakers"] = min_speakers
+        if max_speakers:
+            kwargs["max_speakers"] = max_speakers
+        if min_speakers or max_speakers:
+            log.info("pyannote: min_speakers=%s, max_speakers=%s", min_speakers, max_speakers)
+
+    diarization = pipeline(wav_path, **kwargs)
 
     turns = []
     for segment, _, speaker in diarization.itertracks(yield_label=True):
         turns.append({
-            "speaker": speaker,
+            "speaker": speaker,          # e.g. "SPEAKER_00"
             "start_ms": int(segment.start * 1000),
             "end_ms": int(segment.end * 1000),
-            "text": "",
         })
+
+    turns.sort(key=lambda t: t["start_ms"])
+    log.info("pyannote detected %d raw turns, %d unique speakers",
+             len(turns), len({t["speaker"] for t in turns}))
     return turns
 
 
@@ -36,27 +109,53 @@ def align_transcript_with_diarization(
     diarization_turns: list[dict],
 ) -> list[dict[str, Any]]:
     """
-    Map each Whisper segment to the speaker with maximum time overlap.
+    Assign a speaker label to every Whisper segment using max time-overlap.
+
+    Strategy:
+    - For each Whisper segment, compute overlap with every diarization turn.
+    - Assign the speaker with the maximum total overlap.
+    - If overlap = 0 (gap / silence), assign the nearest speaker by proximity.
+
     Returns [{speaker, start_ms, end_ms, text}]
     """
     aligned = []
+
     for seg in whisper_segments:
         seg_start = int(seg["start"] * 1000)
         seg_end = int(seg["end"] * 1000)
+        text = seg.get("text", "").strip()
 
-        best_speaker = "SPEAKER_UNKNOWN"
-        best_overlap = 0
-
-        for turn in diarization_turns:
-            overlap = min(seg_end, turn["end_ms"]) - max(seg_start, turn["start_ms"])
-            if overlap > best_overlap:
-                best_overlap = overlap
-                best_speaker = turn["speaker"]
+        speaker = _find_speaker(seg_start, seg_end, diarization_turns)
 
         aligned.append({
-            "speaker": best_speaker,
+            "speaker": speaker,
             "start_ms": seg_start,
             "end_ms": seg_end,
-            "text": seg.get("text", "").strip(),
+            "text": text,
         })
+
     return aligned
+
+
+def _find_speaker(seg_start: int, seg_end: int, turns: list[dict]) -> str:
+    """Return speaker with max overlap; fall back to nearest if no overlap."""
+    best_speaker = "SPEAKER_UNKNOWN"
+    best_overlap = 0
+
+    for turn in turns:
+        overlap = min(seg_end, turn["end_ms"]) - max(seg_start, turn["start_ms"])
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_speaker = turn["speaker"]
+
+    if best_speaker == "SPEAKER_UNKNOWN" and turns:
+        # No overlap — assign closest turn by distance
+        best_speaker = min(
+            turns,
+            key=lambda t: min(
+                abs(seg_start - t["end_ms"]),
+                abs(seg_end - t["start_ms"]),
+            ),
+        )["speaker"]
+
+    return best_speaker

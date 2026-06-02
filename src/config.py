@@ -1,3 +1,5 @@
+from typing import Optional
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,6 +34,10 @@ class Settings(BaseSettings):
     whisper_compute_type: str = "int8"
     whisper_device: str = "cpu"
     pyannote_auth_token: str = ""
+    pyannote_num_speakers: Optional[int] = None
+    pyannote_min_speakers: Optional[int] = None
+    pyannote_max_speakers: Optional[int] = None
+    pyannote_use_title_speaker_hint: bool = False
 
     # Embedding backend
     embedding_backend: str = "openai"  # openai | bge-m3
