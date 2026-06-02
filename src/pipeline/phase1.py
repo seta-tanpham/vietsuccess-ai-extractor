@@ -2,14 +2,21 @@
 Phase 1 orchestrator: Raw video → Clean aligned transcript.
 
 Steps:
-  1. Audio normalization (ffmpeg)
-  2. Raw transcript (Whisper)
-  3. Filler word cleaning
-  4. Speaker diarization (pyannote) — skipped if no token
-  5. Speaker turn merging
-  6. Speaker records creation
-  7. Status state machine updates
-  8. Idempotent: any step can be re-run safely
+  1. Audio normalization        ffmpeg → WAV 16kHz mono
+  2. Whisper transcription      text + word-level timestamps
+  3. Filler word cleaning       regex on search_text
+  4. Speaker diarization        pyannote 3.1 — REQUIRES PYANNOTE_AUTH_TOKEN
+  5. Speaker turn merging       gap < 1.5s same speaker → merge
+  6. Speaker records creation   one DB row per unique speaker label
+  7. LLM speaker naming         GPT suggests display_name + role (status="suggested")
+  8. Status state machine       track progress at each step
+  9. Idempotent                 any step restarts safely without re-running earlier steps
+
+Diarization setup (one-time, free):
+  1. Accept: https://hf.co/pyannote/speaker-diarization-3.1
+  2. Accept: https://hf.co/pyannote/segmentation-3.0
+  3. Token:  https://hf.co/settings/tokens  (read access)
+  4. .env:   PYANNOTE_AUTH_TOKEN=hf_xxxx
 """
 import logging
 import os
@@ -54,6 +61,8 @@ def run_phase1(video_id: uuid.UUID, db: Session) -> None:
         _step2_transcribe(video, db)
         _step3_diarize_and_merge(video, db)
         _step4_create_speakers(video, db)
+        llm_duplicates = _step5_llm_speaker_naming(video, db)
+        _step6_deduplicate_speakers(video, db, llm_duplicates=llm_duplicates)
 
         _set_status(db, video, "ready_for_chunking")
         log.info("[%s] Phase 1 complete ✓", video.id)
@@ -159,17 +168,45 @@ def _step3_diarize_and_merge(video: Video, db: Session) -> None:
     segments = transcript.raw_json.get("segments", [])
 
     if settings.pyannote_auth_token:
+        num_spk = settings.pyannote_num_speakers
+        min_spk = settings.pyannote_min_speakers
+        max_spk = settings.pyannote_max_speakers
+
+        if not num_spk and not (min_spk or max_spk) and settings.pyannote_use_title_speaker_hint:
+            from src.pipeline.llm_speaker_naming import detect_show_format
+            title = video.title or video.original_filename or ""
+            min_spk, max_spk, fmt = detect_show_format(title)
+            log.info("[%s] Title hint detected: '%s' → expected %d–%d speakers", video.id, fmt, min_spk, max_spk)
+        elif num_spk or min_spk or max_spk:
+            log.info("[%s] Speaker count override: num=%s min=%s max=%s", video.id, num_spk, min_spk, max_spk)
+        else:
+            log.info("[%s] Speaker count: auto-detect", video.id)
+
         wav_asset = _find_asset(video, "audio_wav")
         with tempfile.TemporaryDirectory() as tmp:
             wav_path = os.path.join(tmp, "audio.wav")
             get_client().fget_object(wav_asset.minio_bucket, wav_asset.object_key, wav_path)
-            raw_turns = diarize(wav_path)
+            raw_turns = diarize(
+                wav_path,
+                num_speakers=num_spk,
+                min_speakers=min_spk,
+                max_speakers=max_spk,
+            )
 
         turns = align_transcript_with_diarization(segments, raw_turns)
-        log.info("[%s] diarized %d raw turns", video.id, len(raw_turns))
+        log.info("[%s] diarized %d raw turns, %d unique speakers",
+                 video.id, len(raw_turns), len({t["speaker"] for t in raw_turns}))
     else:
-        # No pyannote token — assign all to SPEAKER_00, still useful for transcript
-        log.warning("[%s] No PYANNOTE_AUTH_TOKEN — assigning all segments to SPEAKER_00", video.id)
+        log.warning(
+            "[%s] PYANNOTE_AUTH_TOKEN not set — all segments assigned to SPEAKER_00. "
+            "To get real speaker detection:\n"
+            "  1. Accept: https://hf.co/pyannote/speaker-diarization-3.1\n"
+            "  2. Accept: https://hf.co/pyannote/segmentation-3.0\n"
+            "  3. Token:  https://hf.co/settings/tokens\n"
+            "  4. .env:   PYANNOTE_AUTH_TOKEN=hf_xxxx\n"
+            "  5. Re-run: python scripts/run_pipeline.py --id %s --phases 1",
+            video.id, video.id,
+        )
         turns = [
             {
                 "speaker": "SPEAKER_00",
@@ -204,6 +241,115 @@ def _step4_create_speakers(video: Video, db: Session) -> None:
     if new_labels:
         db.commit()
         log.info("[%s] created %d speaker records: %s", video.id, len(new_labels), sorted(new_labels))
+
+
+# ── Step 5: LLM speaker naming ───────────────────────────────────────────────
+
+def _step5_llm_speaker_naming(video: Video, db: Session) -> list[dict]:
+    """
+    Use GPT to suggest display_name + role for each speaker.
+    Non-blocking — failure returns [] and does NOT fail Phase 1.
+    Sets mapping_status = "suggested".
+    Returns potential_duplicates list for Step 6.
+    """
+    from src.pipeline.llm_speaker_naming import (
+        apply_suggestions_to_db,
+        extract_first_turns,
+        suggest_speaker_names,
+    )
+
+    transcript = db.query(Transcript).filter_by(video_id=video.id).first()
+    if not transcript or not transcript.aligned_transcript:
+        return []
+
+    from src.models.speaker import Speaker as SpeakerModel
+    unnamed = db.query(SpeakerModel).filter_by(video_id=video.id, mapping_status="auto").count()
+    if unnamed == 0:
+        log.info("[%s] All speakers already named, skipping LLM naming", video.id)
+        return []
+
+    try:
+        speaker_turns = extract_first_turns(transcript.aligned_transcript)
+        suggestions = suggest_speaker_names(
+            speaker_turns=speaker_turns,
+            video_title=video.title or video.original_filename,
+        )
+        title = video.title or video.original_filename or ""
+        if suggestions:
+            potential_duplicates = apply_suggestions_to_db(
+                suggestions, video.id, db, video_title=title
+            )
+            log.info("[%s] LLM named %d speakers, %d duplicate candidates",
+                     video.id, len(suggestions), len(potential_duplicates))
+            return potential_duplicates
+        # No LLM suggestions at all — still try fallback from title
+        apply_suggestions_to_db([], video.id, db, video_title=title)
+        log.info("[%s] LLM returned no suggestions — applied title fallback", video.id)
+    except Exception as exc:
+        log.warning("[%s] LLM speaker naming skipped: %s", video.id, exc)
+    return []
+
+
+# ── Step 6: Duplicate speaker detection ──────────────────────────────────────
+
+def _step6_deduplicate_speakers(
+    video: Video, db: Session, llm_duplicates: Optional[list] = None
+) -> None:
+    """
+    Detect and merge duplicate speaker labels.
+
+    Method A (always): if LLM gave 2 labels the same name → merge.
+    Method B (if audio available): voice embedding cosine similarity > 0.85 → merge.
+
+    Non-blocking — failure does NOT fail Phase 1.
+    """
+    from src.models.speaker import Speaker as SpeakerModel
+    from src.pipeline.speaker_deduplication import deduplicate_speakers
+
+    transcript = db.query(Transcript).filter_by(video_id=video.id).first()
+    if not transcript or not transcript.aligned_transcript:
+        return
+
+    speakers = db.query(SpeakerModel).filter_by(video_id=video.id).all()
+    if len(speakers) < 2:
+        return  # Only 1 speaker → nothing to deduplicate
+
+    # Try to get WAV path for Method B (voice embedding)
+    wav_path: Optional[str] = None
+    wav_asset = _find_asset(video, "audio_wav")
+    _tmp_dir = None
+    try:
+        if wav_asset:
+            import tempfile, os
+            _tmp_dir = tempfile.mkdtemp()
+            wav_path = os.path.join(_tmp_dir, "audio.wav")
+            get_client().fget_object(wav_asset.minio_bucket, wav_asset.object_key, wav_path)
+    except Exception:
+        wav_path = None  # Method B disabled gracefully
+
+    try:
+        updated_transcript, merge_map = deduplicate_speakers(
+            aligned_transcript=transcript.aligned_transcript,
+            speakers=speakers,
+            wav_path=wav_path,
+            llm_duplicates=llm_duplicates or [],
+            video_id=video.id,
+            db=db,
+        )
+
+        if merge_map:
+            transcript.aligned_transcript = updated_transcript
+            db.commit()
+            log.info("[%s] Deduplication merged %d speaker label(s): %s", video.id, len(merge_map), merge_map)
+        else:
+            log.info("[%s] No duplicate speakers found", video.id)
+
+    except Exception as exc:
+        log.warning("[%s] Speaker deduplication skipped (non-fatal): %s", video.id, exc)
+    finally:
+        if _tmp_dir:
+            import shutil
+            shutil.rmtree(_tmp_dir, ignore_errors=True)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
