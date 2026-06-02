@@ -2,7 +2,7 @@ import threading
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from src.config import settings
@@ -23,6 +23,36 @@ router = APIRouter()
 
 _ALLOWED_MIME = {"video/mp4", "video/webm", "video/quicktime", "video/x-msvideo"}
 _MAX_SIZE_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB
+
+
+@router.get("")
+def list_videos(skip: int = Query(0, ge=0), limit: int = Query(50, le=200), db: Session = Depends(get_db)):
+    from src.models.chunk import Chunk
+    from src.models.embedding import ChunkEmbedding
+    videos = db.query(Video).order_by(Video.created_at.desc()).offset(skip).limit(limit).all()
+    result = []
+    for v in videos:
+        n_speakers = db.query(Speaker).filter_by(video_id=v.id).count()
+        eligible = db.query(Chunk).filter_by(video_id=v.id, chunk_type="semantic", is_low_quality=False).count()
+        embedded = (
+            db.query(ChunkEmbedding)
+            .join(Chunk, Chunk.id == ChunkEmbedding.chunk_id)
+            .filter(Chunk.video_id == v.id)
+            .count()
+        )
+        result.append({
+            "id": str(v.id),
+            "title": v.title,
+            "original_filename": v.original_filename,
+            "status": v.status,
+            "language": v.language,
+            "duration_ms": v.duration_ms,
+            "created_at": v.created_at.isoformat(),
+            "n_speakers": n_speakers,
+            "embedded": embedded,
+            "eligible": eligible,
+        })
+    return {"total": len(result), "items": result}
 
 
 @router.post("/upload", status_code=201)
