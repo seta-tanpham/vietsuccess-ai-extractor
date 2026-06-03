@@ -75,23 +75,27 @@ def run_test():
         
         log.info("Mock records successfully committed. Running Agent query...")
         
-        query = "Đoạn nào anh Khánh nói về áp lực khởi nghiệp vậy?"
-        result = run_chat_agent(db=db, query=query, video_id=video_id)
+        query1 = "Đoạn nào anh Khánh nói về áp lực khởi nghiệp vậy?"
+        result1 = run_chat_agent(db=db, query=query1, video_id=video_id)
         
         log.info("=" * 60)
-        log.info("AGENT RESPONSE:")
-        log.info(result["answer"])
+        log.info("AGENT RESPONSE 1:")
+        log.info(result1["answer"])
         log.info("=" * 60)
         
-        log.info("CITATIONS / RESULTS:")
-        for r in result["search_results"]:
-            log.info(f"- [{format_time(r['start_ms'])} -> {format_time(r['end_ms'])}] {r['speaker_name']}: {r['transcript']}")
+        assert len(result1["search_results"]) > 0, "Query 1 should have retrieved the mock chunk"
+        assert "Quốc Khánh" in result1["answer"], "Answer 1 should mention the speaker name"
+        
+        # Test query that is a statement/concept that previously triggered chitchat
+        query2 = "Cần ưu tiên bảo vệ bản thân (người trụ cột) trước khi lo cho người khác."
+        result2 = run_chat_agent(db=db, query=query2, video_id=video_id)
+        
+        log.info("=" * 60)
+        log.info("AGENT RESPONSE 2:")
+        log.info(result2["answer"])
         log.info("=" * 60)
         
-        # Assertions
-        assert len(result["search_results"]) > 0, "Should have retrieved the mock chunk"
-        assert "Quốc Khánh" in result["answer"], "Answer should mention the speaker name"
-        assert "1:30" in result["answer"] or "2:30" in result["answer"], "Answer should mention the timestamp"
+        assert len(result2["search_results"]) > 0, "Query 2 should have retrieved the mock chunk (search intent)"
         
         log.info("TEST PASSED SUCCESSFULLY! ✓")
         

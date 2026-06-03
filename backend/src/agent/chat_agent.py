@@ -1,27 +1,33 @@
 from typing import TypedDict, List, Optional
 import uuid
 import json
+import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+
+log = logging.getLogger(__name__)
 
 from src.config import settings
 from src.pipeline.embedding import embed_query
 from src.models.speaker import Speaker
+from src.models.video import Video
 from langchain_openai import ChatOpenAI
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, END
 from langfuse.langchain import CallbackHandler
-from langfuse import propagate_attributes
+from langfuse import propagate_attributes, Langfuse
 
 
 # Initialize Langfuse handler only if settings are provided
 langfuse_handler = None
 if settings.langfuse_public_key and settings.langfuse_secret_key:
-    langfuse_handler = CallbackHandler(
+    # Initialize global Langfuse client to configure CallbackHandler
+    Langfuse(
         public_key=settings.langfuse_public_key,
         secret_key=settings.langfuse_secret_key,
         host=settings.langfuse_base_url
     )
+    langfuse_handler = CallbackHandler()
 
 
 class AgentState(TypedDict):
@@ -68,42 +74,41 @@ def fetch_speakers(state: AgentState):
     return {"detected_speakers": speakers_list}
 
 
-def parse_query(state: AgentState, config: RunnableConfig = None):
+def classify_intent(state: AgentState, config: RunnableConfig = None):
     query = state.get("query", "")
-    speakers = state.get("detected_speakers", [])
+    q_clean = query.strip().lower().rstrip("?.!,; ")
     
-    if not speakers:
-        speakers_list_str = "(No speakers available in this video)"
-    else:
-        speakers_list_str = "\n".join([
-            f"- ID: {s['id']}, Name: {s['display_name']} ({s['diarization_label']}), Role: {s['role']}"
-            for s in speakers
-        ])
-    
-    prompt = f"""You are analyzing a user query for a Vietnamese video assistant.
-Your task is to classify the user's intent and extract search parameters if applicable.
+    # Local chitchat keywords/patterns to bypass API calls and avoid 429 quota limits for greetings
+    chitchat_phrases = {
+        "hi", "hello", "xin chào", "chào bạn", "chào", "helo", "hey",
+        "cảm ơn", "cám ơn", "thank you", "thanks", "bye", "tạm biệt",
+        "bạn là ai", "ai đây", "chào ad", "hello ad"
+    }
+    if q_clean in chitchat_phrases:
+        return {"intent": "chitchat"}
+        
+    db = state["db"]
+    video_id = state.get("video_id")
+    video_context = ""
+    if video_id:
+        video = db.query(Video).filter_by(id=video_id).first()
+        if video:
+            title = video.title
+            filename = video.original_filename
+            video_context = f"\nVideo Title: {title or 'N/A'}\nVideo Filename: {filename or 'N/A'}\n"
 
+    prompt = f"""You are analyzing a user query for a Vietnamese video assistant.
+Your task is to classify the user's intent.
+{video_context}
 User Query: "{query}"
 
-List of speakers in the video:
-{speakers_list_str}
-
-Analyze the query:
-1. "intent": Classify the query as:
-   - "chitchat": if the query is a greeting, general introduction, question about you, thank you, or general casual talk unrelated to searching specific moments/content of the video.
-   - "search": if the query is asking about the video's content, specific topics discussed, speakers, timestamps, or asking to summarize/find a moment in the video.
-2. "speaker_matched": (Only if intent is "search" and speakers list is not empty) True if the query refers to a specific speaker from the list (e.g. "Khánh", "Thuỳ Minh", "chị Linh", "SPEAKER_01", "khách mời", etc., matching flexibly). Otherwise False.
-3. "speaker_id": The matched speaker's UUID (string) or null.
-4. "speaker_name": The display name of the matched speaker or null.
-5. "search_topic": (Only if intent is "search") The extracted topic keywords or query to search for (e.g., "thảo luận tiền bạc", "vượt qua áp lực").
+Classification Rules:
+- "chitchat": ONLY for greetings, farewells, thank yous, or questions about the AI assistant itself (e.g., "xin chào", "cảm ơn", "bạn là ai", "chúc một ngày tốt lành").
+- "search": for any query asking about or discussing topics, concepts, opinions, statements, speakers, or content from the video (e.g., "Cần ưu tiên bảo vệ bản thân trước khi lo cho người khác", "áp lực cuộc sống", "kinh doanh thế nào", "ai là khách mời"). Even if it is phrased as a statement and not a question, if it refers to a topic/concept/idea that could be discussed in the video, it MUST be classified as "search".
 
 Respond ONLY with a JSON object in this format (no other text or markdown codeblocks):
 {{
-  "intent": "chitchat" or "search",
-  "speaker_matched": true or false,
-  "speaker_id": "matched speaker UUID (string) or null",
-  "speaker_name": "display name of the matched speaker or null",
-  "search_topic": "extracted search query or null"
+  "intent": "chitchat" or "search"
 }}
 """
     
@@ -116,7 +121,59 @@ Respond ONLY with a JSON object in this format (no other text or markdown codebl
     try:
         response = llm.invoke(prompt, config=config)
         content = response.content.strip()
-        # Clean markdown code blocks if any
+        if content.startswith("```json"):
+            content = content[7:]
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+        
+        data = json.loads(content)
+        return {"intent": data.get("intent", "search")}
+    except Exception:
+        return {"intent": "search"}
+
+
+def parse_query(state: AgentState, config: RunnableConfig = None):
+    query = state.get("query", "")
+    speakers = state.get("detected_speakers", [])
+    
+    if not speakers:
+        return {"speaker_id": None, "speaker_name": None, "search_topic": query}
+        
+    speakers_list_str = "\n".join([
+        f"- ID: {s['id']}, Name: {s['display_name']} ({s['diarization_label']}), Role: {s['role']}"
+        for s in speakers
+    ])
+    
+    prompt = f"""You are analyzing a user query to see if they are asking about what a specific speaker in the video said.
+
+List of speakers in the video:
+{speakers_list_str}
+
+User Query: "{query}"
+
+Analyze the query:
+1. Does the query refer to a specific speaker from the list (e.g. "Khánh", "Thuỳ Minh", "anh A", "SPEAKER_01", "khách mời", etc.)? Match flexibly.
+2. Extract the topic or question they are asking (e.g. "cách vượt qua áp lực", "lời khuyên học tiếng Anh").
+
+Respond ONLY with a JSON object in this format (no other text or codeblocks):
+{{
+  "speaker_matched": true or false,
+  "speaker_id": "matched speaker UUID (string) or null",
+  "speaker_name": "display name of the matched speaker or null",
+  "search_topic": "extracted topic query"
+}}
+"""
+    
+    llm = ChatOpenAI(
+        api_key=settings.openai_api_key,
+        model=settings.openai_model,
+        temperature=0
+    )
+    
+    try:
+        response = llm.invoke(prompt, config=config)
+        content = response.content.strip()
         if content.startswith("```json"):
             content = content[7:]
         if content.endswith("```"):
@@ -129,19 +186,12 @@ Respond ONLY with a JSON object in this format (no other text or markdown codebl
             sp_id = uuid.UUID(data["speaker_id"])
             
         return {
-            "intent": data.get("intent", "search"),
             "speaker_id": sp_id,
             "speaker_name": data.get("speaker_name") if sp_id else None,
             "search_topic": data.get("search_topic") or query
         }
     except Exception:
-        # Fallback to search
-        return {
-            "intent": "search",
-            "speaker_id": None,
-            "speaker_name": None,
-            "search_topic": query
-        }
+        return {"speaker_id": None, "speaker_name": None, "search_topic": query}
 
 
 def retrieve_chunks(state: AgentState):
@@ -317,8 +367,9 @@ Respond in Vietnamese. Your response must follow these strict guidelines to prov
 
 def generate_chitchat(state: AgentState, config: RunnableConfig = None):
     query = state.get("query")
+    q_clean = query.strip().lower().rstrip("?.!,; ")
     
-    prompt = f"""You are Antigravity, the VietSuccess Content AI Agent.
+    prompt = f"""You are a VietSuccess Content AI Agent.
 The user is talking to you casually or asking a general question (chitchat).
 Respond friendly, concisely, and professionally in Vietnamese. 
 
@@ -332,38 +383,43 @@ Answer:"""
         temperature=0.7
     )
     
-    response = llm.invoke(prompt, config=config)
-    return {"answer": response.content.strip()}
+    try:
+        response = llm.invoke(prompt, config=config)
+        return {"answer": response.content.strip()}
+    except Exception as e:
+        log.warning("Chitchat LLM invocation failed: %s. Using static fallback.", e)
+        # Safe static fallbacks in case of OpenAI rate limits or billing/quota issues
+        if "cảm ơn" in q_clean or "cám ơn" in q_clean or "thanks" in q_clean:
+            return {"answer": "Dạ không có gì ạ! Bạn có cần tôi hỗ trợ tìm thông tin gì thêm về video này không?"}
+        if "tạm biệt" in q_clean or "bye" in q_clean:
+            return {"answer": "Tạm biệt bạn! Chúc bạn một ngày tốt lành."}
+        return {"answer": "Xin chào! Tôi là trợ lý AI của VietSuccess. Hôm nay bạn cần tôi hỗ trợ tìm thông tin gì trong video này?"}
 
 
 # ── Graph Construction ─────────────────────────────────────────────────────────
 
-def route_intent(state: AgentState):
-    if state.get("intent") == "chitchat":
-        return "chitchat"
-    return "search"
-
-
 workflow = StateGraph(AgentState)
 
+workflow.add_node("classify_intent", classify_intent)
 workflow.add_node("fetch_speakers", fetch_speakers)
 workflow.add_node("parse_query", parse_query)
 workflow.add_node("retrieve_chunks", retrieve_chunks)
 workflow.add_node("generate_answer", generate_answer)
 workflow.add_node("generate_chitchat", generate_chitchat)
 
-workflow.set_entry_point("fetch_speakers")
-workflow.add_edge("fetch_speakers", "parse_query")
+workflow.set_entry_point("classify_intent")
 
 workflow.add_conditional_edges(
-    "parse_query",
-    route_intent,
+    "classify_intent",
+    lambda state: state["intent"],
     {
         "chitchat": "generate_chitchat",
-        "search": "retrieve_chunks"
+        "search": "fetch_speakers"
     }
 )
 
+workflow.add_edge("fetch_speakers", "parse_query")
+workflow.add_edge("parse_query", "retrieve_chunks")
 workflow.add_edge("retrieve_chunks", "generate_answer")
 workflow.add_edge("generate_answer", END)
 workflow.add_edge("generate_chitchat", END)
