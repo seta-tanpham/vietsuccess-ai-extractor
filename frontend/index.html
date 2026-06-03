@@ -454,20 +454,7 @@
               </div>
 
               <!-- Speaker status / Quick Info -->
-              <div class="panel rounded-2xl p-4 bg-white/80 backdrop-blur">
-                <div class="text-xs uppercase tracking-[0.14em] text-vs-faint font-bold mb-2">Nhân vật trong video (Speakers)</div>
-                <div class="flex flex-wrap gap-2">
-                  <template x-if="!currentVideoSpeakers || !currentVideoSpeakers.length">
-                    <div class="text-xs text-vs-muted">Chưa phát hiện nhân vật hoặc video đang xử lý...</div>
-                  </template>
-                  <template x-for="s in currentVideoSpeakers" :key="s.id">
-                    <div class="px-2.5 py-1 bg-vs-panel2 border border-vs-line rounded-lg flex items-center gap-1.5">
-                      <span class="w-1.5 h-1.5 rounded-full bg-vs-green"></span>
-                      <span class="text-xs font-semibold text-vs-text" x-text="s.display_name || s.label"></span>
-                    </div>
-                  </template>
-                </div>
-              </div>
+              
             </div>
           </div>
 
