@@ -153,6 +153,43 @@
       padding: 9px 12px;
     }
     .ghost:hover { background: #F3F8FC; }
+    .sidebar-shell {
+      transition: width .2s ease, transform .2s ease;
+    }
+    .sidebar-icon-btn {
+      width: 40px;
+      height: 40px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 12px;
+      color: #020381;
+      transition: background .15s, color .15s;
+    }
+    .sidebar-icon-btn:hover { background: #F3F8FC; color: #0693E3; }
+    .sidebar-nav-item {
+      width: 100%;
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-radius: 12px;
+      padding: 10px 12px;
+      color: #4F6882;
+      font-size: 13px;
+      font-weight: 750;
+      text-align: left;
+      transition: background .15s, color .15s;
+    }
+    .sidebar-nav-item:hover { background: #F3F8FC; color: #020381; }
+    .sidebar-nav-item.active { background: #EEF6FD; color: #020381; }
+    .sidebar-nav-icon {
+      width: 24px;
+      min-width: 24px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
     .conversation {
       display: block;
       width: 100%;
@@ -261,54 +298,92 @@
 
 <body x-data="app()" x-init="init()" x-cloak class="h-screen overflow-hidden">
   <div class="flex h-full">
+    <div
+      x-show="mobileSidebarOpen"
+      x-transition.opacity
+      class="fixed inset-0 z-40 bg-vs-text/30 md:hidden"
+      @click="mobileSidebarOpen=false"
+    ></div>
+
     <!-- Conversation rail: only chat names, not app navigation -->
-    <aside class="hidden md:flex w-72 flex-col border-r border-vs-line bg-[#FBFDFF]">
-      <div class="h-20 px-4 flex items-center border-b border-vs-line">
-        <div class="flex items-center gap-3">
+    <aside
+      class="sidebar-shell fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-vs-line bg-[#FBFDFF] md:static md:z-auto"
+      :class="[
+        mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0',
+        sidebarOpen ? 'md:w-72' : 'md:w-[76px]'
+      ]"
+    >
+      <div class="h-20 px-3 flex items-center justify-between border-b border-vs-line">
+        <div class="flex items-center gap-3 min-w-0">
           <img class="w-11 h-11 rounded-2xl object-cover shadow-soft border border-vs-line" src="public/571229234_1519256109878166_628837367939756585_n.jpg" alt="VietSuccess logo" />
-          <div class="min-w-0">
+          <div class="min-w-0" x-show="sidebarOpen || mobileSidebarOpen" x-transition.opacity>
             <div class="font-extrabold text-vs-text tracking-[-0.03em]">VietSuccess AI Search</div>
             <div class="text-xs text-vs-muted mt-0.5">Content intelligence workspace</div>
           </div>
         </div>
+        <button class="sidebar-icon-btn md:hidden" @click="mobileSidebarOpen=false" title="Đóng sidebar">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
       </div>
-      <div class="flex-1 overflow-y-auto p-3 space-y-1">
-        <template x-for="c in conversations" :key="c.id">
-          <button class="conversation" :class="currentConversationId===c.id ? 'active' : ''" @click="selectConversation(c.id)">
-            <div class="truncate" x-text="c.title"></div>
-            <div class="text-[11px] mt-1 opacity-70" x-text="c.messages.length + ' tin nhắn'"></div>
+
+      <nav class="p-3 border-b border-vs-line space-y-1">
+        <template x-for="item in sidebarTabs()" :key="item.view">
+          <button
+            class="sidebar-nav-item"
+            :class="[
+              view === item.view ? 'active' : '',
+              sidebarOpen ? '' : 'md:px-0 md:justify-center'
+            ]"
+            @click="setView(item.view); mobileSidebarOpen=false"
+            :title="item.label"
+          >
+            <span class="sidebar-nav-icon" x-html="item.icon"></span>
+            <span x-show="sidebarOpen || mobileSidebarOpen" x-transition.opacity x-text="item.label"></span>
           </button>
         </template>
+      </nav>
+
+      <div class="flex-1 min-h-0">
+        <div class="h-full overflow-y-auto p-3 space-y-1" x-show="sidebarOpen || mobileSidebarOpen" x-transition.opacity>
+          <div class="px-2 pb-2 text-[11px] uppercase tracking-[0.16em] text-vs-faint font-bold">Gần đây</div>
+          <template x-for="c in conversations" :key="c.id">
+            <button class="conversation" :class="currentConversationId===c.id ? 'active' : ''" @click="selectConversation(c.id); mobileSidebarOpen=false" :title="c.title">
+              <div class="truncate" x-text="c.title"></div>
+              <div class="text-[11px] mt-1 opacity-70" x-text="c.messages.length + ' tin nhắn'"></div>
+            </button>
+          </template>
+        </div>
       </div>
       <div class="p-4">
-        <button class="new-chat-btn" @click="newConversation()">
+        <button
+          class="new-chat-btn"
+          :class="sidebarOpen ? '' : 'md:w-11 md:h-11 md:p-0 md:rounded-xl'"
+          @click="newConversation(); mobileSidebarOpen=false"
+          :title="sidebarOpen ? '' : 'Cuộc hội thoại mới'"
+        >
           <span>+</span>
-          Cuộc hội thoại mới
+          <span x-show="sidebarOpen || mobileSidebarOpen" x-transition.opacity>Cuộc hội thoại mới</span>
         </button>
       </div>
       <div class="p-4 border-t border-vs-line">
         <div class="relative" @click.outside="avatarOpen=false">
-          <button class="w-full flex items-center gap-3 text-left rounded-2xl p-2 hover:bg-vs-panel2 transition-colors" @click="avatarOpen=!avatarOpen">
-            <img class="w-10 h-10 rounded-full object-cover border border-vs-line flex-shrink-0" src="public/571229234_1519256109878166_628837367939756585_n.jpg" alt="VietSuccess AI" />
-            <div class="min-w-0 flex-1">
+          <button
+            class="w-full flex items-center gap-3 text-left rounded-2xl p-2 hover:bg-vs-panel2 transition-colors"
+            :class="sidebarOpen ? '' : 'md:w-11 md:h-11 md:p-0 md:mx-auto md:justify-center md:rounded-xl'"
+            @click="avatarOpen=!avatarOpen"
+          >
+            <img class="w-10 h-10 min-w-10 min-h-10 max-w-10 max-h-10 rounded-full object-cover border border-vs-line flex-shrink-0" src="public/571229234_1519256109878166_628837367939756585_n.jpg" alt="VietSuccess AI" />
+            <div class="min-w-0 flex-1" x-show="sidebarOpen || mobileSidebarOpen" x-transition.opacity>
               <div class="text-[11px] uppercase tracking-[0.16em] text-vs-faint font-bold">VietSuccess AI</div>
             </div>
-            <svg class="text-vs-faint flex-shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+            <svg x-show="sidebarOpen || mobileSidebarOpen" class="text-vs-faint flex-shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
           </button>
-          <div x-show="avatarOpen" x-transition class="absolute left-2 right-2 bottom-full mb-3 avatar-menu rounded-2xl p-2 z-50">
-            <button class="avatar-menu-item" @click="setView('videos')">
-              <span class="avatar-menu-icon">
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3V9Z"/></svg>
-              </span>
-              Kho video
-            </button>
-            <button class="avatar-menu-item" @click="setView('dashboard')">
-              <span class="avatar-menu-icon">
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="8" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="15" width="7" height="6" rx="1"/></svg>
-              </span>
-              Dashboard
-            </button>
-            <div class="border-t border-vs-line my-2"></div>
+          <div
+            x-show="avatarOpen"
+            x-transition
+            class="absolute bottom-full mb-3 avatar-menu rounded-2xl p-2 z-50 w-64"
+            :class="(sidebarOpen || mobileSidebarOpen) ? 'left-2 right-2' : 'left-0 md:left-full md:bottom-0 md:mb-0 md:ml-3'"
+          >
             <button class="avatar-menu-item" @click="showToast('Settings sẽ được nối ở bước sau'); avatarOpen=false">
               <span class="avatar-menu-icon">
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.07.35.25.68.6 1 .29.27.68.4 1.1.4H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15Z"/></svg>
@@ -323,7 +398,19 @@
     <main class="flex-1 flex flex-col min-w-0">
       <!-- Top bar -->
       <header class="h-20 px-4 md:px-6 flex items-center justify-between border-b border-vs-line bg-white/70 backdrop-blur">
-        <div></div>
+        <div class="flex items-center gap-2">
+          <button class="icon-btn md:hidden" @click="mobileSidebarOpen=true" title="Mở sidebar">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></svg>
+          </button>
+          <button class="icon-btn hidden md:inline-flex" @click="sidebarOpen=!sidebarOpen" :title="sidebarOpen ? 'Thu sidebar' : 'Mở sidebar'">
+            <svg x-show="sidebarOpen" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18 9 12l6-6"/><path d="M4 4h16v16H4z"/></svg>
+            <svg x-show="!sidebarOpen" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/><path d="M4 4h16v16H4z"/></svg>
+          </button>
+          <div>
+            <div class="text-xs uppercase tracking-[0.16em] text-vs-faint font-bold" x-text="screenTitle()"></div>
+            <div class="text-sm font-bold text-vs-text truncate max-w-[58vw]" x-text="currentVideoTitle || 'VietSuccess AI Search'"></div>
+          </div>
+        </div>
 
         <div class="md:hidden">
           <button class="icon-btn" @click="setView('videos')" title="Kho video">
@@ -520,7 +607,7 @@
 
       <!-- Upload -->
       <section x-show="view==='upload'" class="flex-1 overflow-y-auto p-4 md:p-8 fade-in">
-        <div class="max-w-2xl mx-auto">
+        <div class="max-w-5xl mx-auto">
           <h1 class="text-2xl font-extrabold tracking-[-0.03em]">Upload video</h1>
           <p class="text-sm text-vs-muted mt-1">Upload file để backend chạy pipeline.</p>
 
@@ -606,6 +693,8 @@ const API = 'http://localhost:8000';
 function app() {
   return {
     view: 'chat',
+    sidebarOpen: true,
+    mobileSidebarOpen: false,
     avatarOpen: false,
     videos: [],
     loadingVideos: false,
@@ -672,6 +761,31 @@ function app() {
         upload: 'Upload video'
       };
       return map[this.view] || 'AI Search';
+    },
+
+    sidebarTabs() {
+      return [
+        // {
+        //   view: 'chat',
+        //   label: 'AI Search',
+        //   icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg>'
+        // },
+        {
+          view: 'videos',
+          label: 'Kho video',
+          icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3V9Z"/></svg>'
+        },
+        // {
+        //   view: 'dashboard',
+        //   label: 'Dashboard',
+        //   icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="8" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="15" width="7" height="6" rx="1"/></svg>'
+        // },
+        // {
+        //   view: 'upload',
+        //   label: 'Upload video',
+        //   icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></svg>'
+        // }
+      ];
     },
 
     activeConversation() {
