@@ -888,7 +888,8 @@ function app() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             query: q,
-            video_id: this.chatVideoId || null
+            video_id: this.chatVideoId || null,
+            session_id: conv.id
           })
         });
         const data = await r.json();

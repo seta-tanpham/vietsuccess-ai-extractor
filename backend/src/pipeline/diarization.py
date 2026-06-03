@@ -159,3 +159,146 @@ def _find_speaker(seg_start: int, seg_end: int, turns: list[dict]) -> str:
         )["speaker"]
 
     return best_speaker
+
+
+_DIARIZATION_SYSTEM_PROMPT = """You are analyzing a Vietnamese transcript to perform speaker diarization (labeling which speaker spoke each segment).
+
+Your task:
+Analyze the flow of conversation, questions and answers, forms of address (e.g. 'anh', 'chị', 'em', 'tôi', 'dạ', 'hỏi', 'trả lời'), and conversational context.
+Assign a speaker label to each segment (e.g. SPEAKER_00, SPEAKER_01, SPEAKER_02).
+
+Constraints:
+1. Ensure the speaker labels are consistent across the entire transcript.
+2. Minimize the number of unique speakers (typically 2-3 speakers for an interview/podcast).
+3. Do not change the original segment indexes or skip any segments. Every input segment index must be mapped to a speaker label.
+4. Output ONLY valid JSON in the requested format.
+"""
+
+_DIARIZATION_USER_TEMPLATE = """VIDEO TITLE: {title}
+
+Transcript segments to label:
+{segment_blocks}
+
+Respond ONLY with a JSON object in this format:
+{{
+  "speaker_map": {{
+    "0": "SPEAKER_00",
+    "1": "SPEAKER_00",
+    "2": "SPEAKER_01"
+  }}
+}}"""
+
+
+def diarize_with_gpt(
+    whisper_segments: list[dict],
+    video_title: str = "",
+) -> list[dict[str, Any]]:
+    """
+    Diarize Whisper segments using gpt-4o-transcribe-diarize, 
+    falling back to settings.openai_model if needed.
+    """
+    import json
+    from openai import OpenAI, APIError
+    
+    if not settings.openai_api_key:
+        log.warning("OPENAI_API_KEY not set — all segments assigned to SPEAKER_00.")
+        return [
+            {
+                "speaker": "SPEAKER_00",
+                "start_ms": int(seg.get("start", 0.0) * 1000),
+                "end_ms": int(seg.get("end", 0.0) * 1000),
+                "text": seg.get("text", "").strip(),
+            }
+            for seg in whisper_segments
+        ]
+
+    # Format segments
+    segment_lines = []
+    for i, seg in enumerate(whisper_segments):
+        start = seg.get("start", 0.0)
+        end = seg.get("end", 0.0)
+        text = seg.get("text", "").strip()
+        segment_lines.append(f"{i} [{start:.2f}s - {end:.2f}s]: {text}")
+    segment_blocks = "\n".join(segment_lines)
+
+    prompt = _DIARIZATION_USER_TEMPLATE.format(
+        title=video_title or "VietSuccess video",
+        segment_blocks=segment_blocks,
+    )
+
+    client = OpenAI(api_key=settings.openai_api_key)
+    
+    # Try calling the custom model first
+    model_name = settings.diarization_gpt_model
+    log.info("Requesting GPT-based diarization using model: %s", model_name)
+    
+    content = None
+    try:
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": _DIARIZATION_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+        content = response.choices[0].message.content
+    except APIError as e:
+        # Check if 404/NotFoundError or auth error, or permission issues
+        log.warning("Failed to call %s: %s. Falling back to %s", model_name, e, settings.openai_model)
+        try:
+            response = client.chat.completions.create(
+                model=settings.openai_model,
+                messages=[
+                    {"role": "system", "content": _DIARIZATION_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+                response_format={"type": "json_object"},
+            )
+            content = response.choices[0].message.content
+        except Exception as fallback_err:
+            log.error("Fallback model %s also failed: %s", settings.openai_model, fallback_err)
+    except Exception as e:
+        log.warning("Unexpected error with %s: %s. Falling back to %s", model_name, e, settings.openai_model)
+        try:
+            response = client.chat.completions.create(
+                model=settings.openai_model,
+                messages=[
+                    {"role": "system", "content": _DIARIZATION_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+                response_format={"type": "json_object"},
+            )
+            content = response.choices[0].message.content
+        except Exception as fallback_err:
+            log.error("Fallback model %s also failed: %s", settings.openai_model, fallback_err)
+
+    speaker_map = {}
+    if content:
+        try:
+            data = json.loads(content)
+            speaker_map = data.get("speaker_map", {})
+        except Exception as json_err:
+            log.error("Failed to parse GPT diarization JSON response: %s", json_err)
+
+    # Convert mapping back to aligned turns
+    aligned = []
+    for i, seg in enumerate(whisper_segments):
+        # Retrieve speaker label, handle string or int keys in LLM output
+        speaker = speaker_map.get(str(i)) or speaker_map.get(i) or "SPEAKER_00"
+        
+        # Ensure label matches format SPEAKER_XX
+        if isinstance(speaker, str) and not speaker.startswith("SPEAKER_"):
+            speaker = f"SPEAKER_{speaker}"
+            
+        aligned.append({
+            "speaker": speaker,
+            "start_ms": int(seg.get("start", 0.0) * 1000),
+            "end_ms": int(seg.get("end", 0.0) * 1000),
+            "text": seg.get("text", "").strip(),
+        })
+        
+    return aligned

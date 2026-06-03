@@ -8,13 +8,27 @@ from src.config import settings
 from src.pipeline.embedding import embed_query
 from src.models.speaker import Speaker
 from langchain_openai import ChatOpenAI
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, END
+from langfuse.langchain import CallbackHandler
+from langfuse import propagate_attributes
+
+
+# Initialize Langfuse handler only if settings are provided
+langfuse_handler = None
+if settings.langfuse_public_key and settings.langfuse_secret_key:
+    langfuse_handler = CallbackHandler(
+        public_key=settings.langfuse_public_key,
+        secret_key=settings.langfuse_secret_key,
+        host=settings.langfuse_base_url
+    )
 
 
 class AgentState(TypedDict):
     query: str
     video_id: Optional[uuid.UUID]
     db: Session
+    intent: Optional[str]
     speaker_id: Optional[uuid.UUID]
     speaker_name: Optional[str]
     search_topic: Optional[str]
@@ -54,35 +68,42 @@ def fetch_speakers(state: AgentState):
     return {"detected_speakers": speakers_list}
 
 
-def parse_query(state: AgentState):
+def parse_query(state: AgentState, config: RunnableConfig = None):
     query = state.get("query", "")
     speakers = state.get("detected_speakers", [])
     
     if not speakers:
-        return {"speaker_id": None, "speaker_name": None, "search_topic": query}
-        
-    speakers_list_str = "\n".join([
-        f"- ID: {s['id']}, Name: {s['display_name']} ({s['diarization_label']}), Role: {s['role']}"
-        for s in speakers
-    ])
+        speakers_list_str = "(No speakers available in this video)"
+    else:
+        speakers_list_str = "\n".join([
+            f"- ID: {s['id']}, Name: {s['display_name']} ({s['diarization_label']}), Role: {s['role']}"
+            for s in speakers
+        ])
     
-    prompt = f"""You are analyzing a user query to see if they are asking about what a specific speaker in the video said.
+    prompt = f"""You are analyzing a user query for a Vietnamese video assistant.
+Your task is to classify the user's intent and extract search parameters if applicable.
+
+User Query: "{query}"
 
 List of speakers in the video:
 {speakers_list_str}
 
-User Query: "{query}"
-
 Analyze the query:
-1. Does the query refer to a specific speaker from the list (e.g. "Khánh", "Thuỳ Minh", "anh A", "SPEAKER_01", "khách mời", etc.)? Match flexibly.
-2. Extract the topic or question they are asking (e.g. "cách vượt qua áp lực", "lời khuyên học tiếng Anh").
+1. "intent": Classify the query as:
+   - "chitchat": if the query is a greeting, general introduction, question about you, thank you, or general casual talk unrelated to searching specific moments/content of the video.
+   - "search": if the query is asking about the video's content, specific topics discussed, speakers, timestamps, or asking to summarize/find a moment in the video.
+2. "speaker_matched": (Only if intent is "search" and speakers list is not empty) True if the query refers to a specific speaker from the list (e.g. "Khánh", "Thuỳ Minh", "chị Linh", "SPEAKER_01", "khách mời", etc., matching flexibly). Otherwise False.
+3. "speaker_id": The matched speaker's UUID (string) or null.
+4. "speaker_name": The display name of the matched speaker or null.
+5. "search_topic": (Only if intent is "search") The extracted topic keywords or query to search for (e.g., "thảo luận tiền bạc", "vượt qua áp lực").
 
-Respond ONLY with a JSON object in this format (no other text or codeblocks):
+Respond ONLY with a JSON object in this format (no other text or markdown codeblocks):
 {{
+  "intent": "chitchat" or "search",
   "speaker_matched": true or false,
   "speaker_id": "matched speaker UUID (string) or null",
   "speaker_name": "display name of the matched speaker or null",
-  "search_topic": "extracted topic query"
+  "search_topic": "extracted search query or null"
 }}
 """
     
@@ -93,7 +114,7 @@ Respond ONLY with a JSON object in this format (no other text or codeblocks):
     )
     
     try:
-        response = llm.invoke(prompt)
+        response = llm.invoke(prompt, config=config)
         content = response.content.strip()
         # Clean markdown code blocks if any
         if content.startswith("```json"):
@@ -108,13 +129,19 @@ Respond ONLY with a JSON object in this format (no other text or codeblocks):
             sp_id = uuid.UUID(data["speaker_id"])
             
         return {
+            "intent": data.get("intent", "search"),
             "speaker_id": sp_id,
             "speaker_name": data.get("speaker_name") if sp_id else None,
             "search_topic": data.get("search_topic") or query
         }
     except Exception:
-        # Fallback to original query
-        return {"speaker_id": None, "speaker_name": None, "search_topic": query}
+        # Fallback to search
+        return {
+            "intent": "search",
+            "speaker_id": None,
+            "speaker_name": None,
+            "search_topic": query
+        }
 
 
 def retrieve_chunks(state: AgentState):
@@ -239,7 +266,7 @@ def retrieve_chunks(state: AgentState):
     return {"search_results": results}
 
 
-def generate_answer(state: AgentState):
+def generate_answer(state: AgentState, config: RunnableConfig = None):
     query = state.get("query")
     results = state.get("search_results", [])
     speaker_name = state.get("speaker_name")
@@ -268,15 +295,14 @@ User Query: "{query}"
 Here are the search results from the video transcript:
 {context_str}
 
-Respond in Vietnamese. Your response must:
-1. Directly answer the user's question.
-2. For each relevant point or section mentioned, specify the exact timestamp range (e.g. [02:15 - 04:30] or [01:05:12 - 01:07:45]) and state who is speaking.
-3. Provide a concise summary of what was said.
-4. Keep the answer structured, well-formatted, and easy to read.
+Respond in Vietnamese. Your response must follow these strict guidelines to provide a high-quality, direct, and extremely concise answer:
 
-If the user asked specifically about speaker "{speaker_name or ''}" but the results only contain statements from other speakers, mention that you couldn't find statements by "{speaker_name}" on this topic, but point out what other speakers said instead.
-
-Keep the response concise, engaging, and professional.
+1. DO NOT output dry segment-by-segment dumps, structures like "Segment 1:", "Thời gian:", "Người nói:", "Tóm tắt:", or conversational filler paragraphs (e.g. "Đầu tiên...", "Tiếp theo...", "Cuối cùng...", "Những chia sẻ này giúp...").
+2. Write a synthesized, direct response. Start immediately with a 1-sentence introduction stating who is speaking and the overall timestamp range in square brackets (e.g. "Nghệ thuật thảo luận về tiền bạc với cha mẹ được chị Thái Vân Linh chia sẻ chi tiết từ [23:25 - 26:04]. Để cuộc trò chuyện diễn ra khéo léo và hiệu quả, chị gợi ý hai bí quyết sau:").
+3. Present the key points directly using clean bullet points with bold titles (e.g. "- **Sử dụng người thứ ba để mở lời**: [2-3 sentences max summarizing this point]").
+4. Every timestamp range MUST be in square brackets `[MM:SS]` or `[HH:MM:SS]` (e.g., [23:25 - 26:04], [24:15]) so they can be parsed into interactive click-to-seek buttons. Do not use parentheses for timestamps.
+5. Keep the content extremely concise and high-density. Avoid wordy explanations, repetitions, or fluff. Stop writing immediately after the bullet points (do not write any wrap-up or conclusion sentence at the end).
+6. If the user asked specifically about speaker "{speaker_name or ''}" but the results only contain statements from other speakers, mention that you couldn't find statements by "{speaker_name}" on this topic, but point out what other speakers said instead.
 """
     
     llm = ChatOpenAI(
@@ -285,11 +311,38 @@ Keep the response concise, engaging, and professional.
         temperature=0.3
     )
     
-    response = llm.invoke(prompt)
+    response = llm.invoke(prompt, config=config)
+    return {"answer": response.content.strip()}
+
+
+def generate_chitchat(state: AgentState, config: RunnableConfig = None):
+    query = state.get("query")
+    
+    prompt = f"""You are Antigravity, the VietSuccess Content AI Agent.
+The user is talking to you casually or asking a general question (chitchat).
+Respond friendly, concisely, and professionally in Vietnamese. 
+
+User query: "{query}"
+
+Answer:"""
+    
+    llm = ChatOpenAI(
+        api_key=settings.openai_api_key,
+        model=settings.openai_model,
+        temperature=0.7
+    )
+    
+    response = llm.invoke(prompt, config=config)
     return {"answer": response.content.strip()}
 
 
 # ── Graph Construction ─────────────────────────────────────────────────────────
+
+def route_intent(state: AgentState):
+    if state.get("intent") == "chitchat":
+        return "chitchat"
+    return "search"
+
 
 workflow = StateGraph(AgentState)
 
@@ -297,22 +350,39 @@ workflow.add_node("fetch_speakers", fetch_speakers)
 workflow.add_node("parse_query", parse_query)
 workflow.add_node("retrieve_chunks", retrieve_chunks)
 workflow.add_node("generate_answer", generate_answer)
+workflow.add_node("generate_chitchat", generate_chitchat)
 
 workflow.set_entry_point("fetch_speakers")
 workflow.add_edge("fetch_speakers", "parse_query")
-workflow.add_edge("parse_query", "retrieve_chunks")
+
+workflow.add_conditional_edges(
+    "parse_query",
+    route_intent,
+    {
+        "chitchat": "generate_chitchat",
+        "search": "retrieve_chunks"
+    }
+)
+
 workflow.add_edge("retrieve_chunks", "generate_answer")
 workflow.add_edge("generate_answer", END)
+workflow.add_edge("generate_chitchat", END)
 
 agent = workflow.compile()
 
 
-def run_chat_agent(db: Session, query: str, video_id: Optional[uuid.UUID] = None) -> dict:
+def run_chat_agent(
+    db: Session,
+    query: str,
+    video_id: Optional[uuid.UUID] = None,
+    session_id: Optional[str] = None
+) -> dict:
     """Run the LangGraph agent synchronously and return results."""
     initial_state = {
         "query": query,
         "video_id": video_id,
         "db": db,
+        "intent": None,
         "speaker_id": None,
         "speaker_name": None,
         "search_topic": None,
@@ -321,7 +391,16 @@ def run_chat_agent(db: Session, query: str, video_id: Optional[uuid.UUID] = None
         "answer": ""
     }
     
-    result = agent.invoke(initial_state)
+    config = {}
+    if langfuse_handler:
+        config["callbacks"] = [langfuse_handler]
+        
+    if session_id and langfuse_handler:
+        with propagate_attributes(session_id=str(session_id)):
+            result = agent.invoke(initial_state, config=config)
+    else:
+        result = agent.invoke(initial_state, config=config)
+        
     return {
         "answer": result["answer"],
         "search_results": result["search_results"]

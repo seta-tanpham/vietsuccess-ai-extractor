@@ -23,6 +23,7 @@ torchaudio>=2.2.0
 langchain>=0.2.0
 langchain-openai>=0.1.0
 langgraph>=0.0.1
+langfuse>=2.0.0
 
 # ── Audio processing ─────────────────────────────────────────────────────────
 ffmpeg-python>=0.2.0
