@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.config import settings
@@ -237,7 +238,22 @@ def crawl_video(body: CrawlRequest, db: Session = Depends(get_db)):
             object_key=thumbnail_key,
             mime_type="image/jpeg",
         ))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Race: another request crawled the same youtube_video_id between the dedup
+        # check and here. The DB UNIQUE index blocks the duplicate — return existing.
+        db.rollback()
+        dup = db.query(Video).filter(Video.youtube_video_id == youtube_id).first()
+        if dup:
+            return {
+                "video_id": str(dup.id),
+                "status": dup.status,
+                "source_type": "youtube",
+                "youtube_video_id": youtube_id,
+                "message": "Video already crawled (concurrent request); returning existing record.",
+            }
+        raise
     db.refresh(video)
 
     _run_background(video_id)

@@ -130,6 +130,8 @@ def main():
     parser = argparse.ArgumentParser(description="Crawl a YouTube video + run pipeline with live logs")
     parser.add_argument("url", help="YouTube URL")
     parser.add_argument("--fresh", action="store_true", help="Ignore dedup; crawl a new copy")
+    parser.add_argument("--reprocess", action="store_true",
+                        help="Re-run the pipeline even if the video is already 'ready'")
     args = parser.parse_args()
 
     print("=" * 70)
@@ -145,8 +147,14 @@ def main():
         )
 
         if existing and not args.fresh:
+            # Already crawled: skip processing if it's already done, unless --reprocess.
+            if existing.status == "ready" and not args.reprocess:
+                log.info("[crawl] already crawled and ready (%s) — skipping. Use --reprocess to force.",
+                         existing.id)
+                print(f"\nSKIPPED (already ready): video_id = {existing.id}")
+                return
             video_id = existing.id
-            log.info("[crawl] already crawled → re-running pipeline on existing video %s", video_id)
+            log.info("[crawl] exists (status=%s) → re-running pipeline on %s", existing.status, video_id)
         else:
             video_id = crawl_and_register(db, args.url)
 
