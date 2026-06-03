@@ -42,7 +42,8 @@ def run_phase3(video_id: uuid.UUID, db: Session) -> dict:
     try:
         result = _embed_video_chunks(video_id, db)
         _ensure_hnsw_index(db)
-        video.status = "ready"
+        # Phase 4 (summary) advances to `ready`; mark the embedding stage done here.
+        video.status = "ready_for_summary"
         db.commit()
         log.info("[%s] Phase 3 complete ✓ — %d chunks embedded", video_id, result["embedded_count"])
         return result

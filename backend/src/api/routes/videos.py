@@ -3,6 +3,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from src.config import settings
@@ -20,6 +21,10 @@ from src.pipeline.video_deduplication import (
 from src.storage.minio_client import ensure_buckets, get_presigned_url, upload_file
 
 router = APIRouter()
+
+
+class CrawlRequest(BaseModel):
+    url: str
 
 _ALLOWED_MIME = {"video/mp4", "video/webm", "video/quicktime", "video/x-msvideo"}
 _MAX_SIZE_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB
@@ -132,6 +137,192 @@ async def upload_video(file: UploadFile = File(...), db: Session = Depends(get_d
     }
 
 
+@router.post("/crawl", status_code=201)
+def crawl_video(body: CrawlRequest, db: Session = Depends(get_db)):
+    """Crawl a YouTube video via yt-dlp → create Video record + raw_video asset →
+    kick off the same Phase 1→4 pipeline used for uploads (STT + diarization included)."""
+    from src.pipeline.youtube_crawl import (
+        YouTubeCrawlError,
+        canonicalize_url,
+        download_media,
+        extract_video_id,
+        map_metadata,
+    )
+
+    try:
+        youtube_id = extract_video_id(body.url)
+        canonical = canonicalize_url(body.url)
+    except YouTubeCrawlError as exc:
+        raise HTTPException(400, str(exc))
+
+    # Dedup: same youtube_video_id already crawled → return existing
+    existing = (
+        db.query(Video)
+        .filter(Video.youtube_video_id == youtube_id)
+        .order_by(Video.created_at.asc())
+        .first()
+    )
+    if existing:
+        return {
+            "video_id": str(existing.id),
+            "status": existing.status,
+            "source_type": "youtube",
+            "youtube_video_id": youtube_id,
+            "message": "Video already crawled; returning existing record.",
+        }
+
+    ensure_buckets()
+
+    try:
+        local_path, info = download_media(canonical)
+    except YouTubeCrawlError as exc:
+        raise HTTPException(502, f"Crawl failed: {exc}")
+
+    meta = map_metadata(info)
+    video_id = uuid.uuid4()
+    object_key = f"{video_id}/raw.mp4"
+
+    import os
+    try:
+        upload_file(settings.minio_bucket_videos, object_key, str(local_path), "video/mp4")
+        raw_metadata_key = _upload_raw_metadata(video_id, info)
+        thumbnail_key = _maybe_fetch_thumbnail(video_id, meta.get("thumbnail_url"))
+        size_bytes = local_path.stat().st_size
+    finally:
+        try:
+            os.unlink(local_path)
+        except OSError:
+            pass
+
+    channel = _get_or_create_channel(db, meta.get("channel") or {})
+
+    from datetime import datetime, timezone
+    video = Video(
+        id=video_id,
+        source_type="youtube",
+        youtube_video_id=youtube_id,
+        youtube_url=body.url,
+        canonical_url=canonical,
+        crawl_status="completed",
+        raw_metadata_key=raw_metadata_key,
+        title=meta.get("title"),
+        description=meta.get("description"),
+        duration_ms=meta.get("duration_ms"),
+        published_at=meta.get("published_at"),
+        channel_id=channel.id if channel else None,
+        tags=meta.get("tags"),
+        youtube_category_id=meta.get("youtube_category_id"),
+        default_language=meta.get("default_language"),
+        language=meta.get("default_language"),
+        view_count=meta.get("view_count"),
+        like_count=meta.get("like_count"),
+        comment_count=meta.get("comment_count"),
+        statistics_crawled_at=datetime.now(timezone.utc),
+        status="uploaded",
+    )
+    db.add(video)
+    db.add(VideoAsset(
+        video_id=video_id,
+        asset_type="raw_video",
+        minio_bucket=settings.minio_bucket_videos,
+        object_key=object_key,
+        mime_type="video/mp4",
+        size_bytes=size_bytes,
+    ))
+    if thumbnail_key:
+        db.add(VideoAsset(
+            video_id=video_id,
+            asset_type="thumbnail",
+            minio_bucket=settings.minio_bucket_videos,
+            object_key=thumbnail_key,
+            mime_type="image/jpeg",
+        ))
+    db.commit()
+    db.refresh(video)
+
+    _run_background(video_id)
+
+    return {
+        "video_id": str(video_id),
+        "status": video.status,
+        "source_type": "youtube",
+        "youtube_video_id": youtube_id,
+        "title": video.title,
+        "channel": channel.title if channel else None,
+        "duplicate_of_video_id": None,
+    }
+
+
+def _get_or_create_channel(db: Session, channel_meta: dict):
+    """Upsert a Channel from yt-dlp metadata. Returns the Channel or None."""
+    from src.models.channel import Channel
+
+    yt_channel_id = channel_meta.get("youtube_channel_id")
+    if not yt_channel_id:
+        return None
+
+    channel = db.query(Channel).filter_by(youtube_channel_id=yt_channel_id).first()
+    if channel:
+        return channel
+
+    channel = Channel(
+        youtube_channel_id=yt_channel_id,
+        title=channel_meta.get("title"),
+        custom_url=channel_meta.get("custom_url"),
+        thumbnail_url=channel_meta.get("thumbnail_url"),
+        subscriber_count=channel_meta.get("subscriber_count"),
+    )
+    db.add(channel)
+    db.flush()  # assign channel.id within this transaction
+    return channel
+
+
+def _upload_raw_metadata(video_id: uuid.UUID, info: dict) -> str:
+    """Persist the raw yt-dlp info JSON to MinIO for audit/debug. Returns object key."""
+    import json
+    import os
+    import tempfile
+
+    object_key = f"{video_id}/youtube_metadata.json"
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json", encoding="utf-8") as tmp:
+        json.dump(info, tmp, ensure_ascii=False, default=str)
+        tmp_path = tmp.name
+    try:
+        upload_file(settings.minio_bucket_videos, object_key, tmp_path, "application/json")
+    finally:
+        os.unlink(tmp_path)
+    return object_key
+
+
+def _maybe_fetch_thumbnail(video_id: uuid.UUID, thumbnail_url: str | None) -> str | None:
+    """Best-effort download of the YouTube thumbnail into MinIO. Returns object key or None."""
+    if not settings.youtube_fetch_thumbnail or not thumbnail_url:
+        return None
+
+    import os
+    import tempfile
+
+    import httpx
+
+    try:
+        resp = httpx.get(thumbnail_url, timeout=20.0, follow_redirects=True)
+        resp.raise_for_status()
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("[%s] Thumbnail fetch failed (non-fatal): %s", video_id, exc)
+        return None
+
+    object_key = f"{video_id}/thumbnail.jpg"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+        tmp.write(resp.content)
+        tmp_path = tmp.name
+    try:
+        upload_file(settings.minio_bucket_videos, object_key, tmp_path, "image/jpeg")
+    finally:
+        os.unlink(tmp_path)
+    return object_key
+
+
 @router.get("/{video_id}")
 def get_video(video_id: uuid.UUID, db: Session = Depends(get_db)):
     video = db.get(Video, video_id)
@@ -217,11 +408,34 @@ def reprocess(video_id: uuid.UUID, db: Session = Depends(get_db)):
 
 def _run_background(video_id: uuid.UUID) -> None:
     from src.database import SessionLocal
+    from src.pipeline.phase2 import run_phase2
+    from src.pipeline.phase3 import run_phase3
+    from src.pipeline.phase4 import run_phase4
+    from src.models.video import Video
+    import logging
 
     def _task():
         db = SessionLocal()
         try:
             run_phase1(video_id, db)
+
+            logging.getLogger(__name__).info("[%s] Starting background pipeline Phase 2", video_id)
+            run_phase2(video_id, db)
+
+            logging.getLogger(__name__).info("[%s] Starting background pipeline Phase 3", video_id)
+            run_phase3(video_id, db)
+
+            logging.getLogger(__name__).info("[%s] Starting background pipeline Phase 4", video_id)
+            run_phase4(video_id, db)
+        except Exception as exc:
+            logging.getLogger(__name__).exception("Full background pipeline failed for %s: %s", video_id, exc)
+            try:
+                video = db.get(Video, video_id)
+                if video:
+                    video.status = "error"
+                    db.commit()
+            except Exception:
+                db.rollback()
         finally:
             db.close()
 

@@ -19,6 +19,8 @@ class Transcript(Base):
     video_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("videos.id", ondelete="CASCADE"), nullable=False)
     # whisper-large-v3 | phowhisper | manual
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    # Where the transcript came from: 'stt' (audio → Whisper) | 'caption' (YouTube subtitle)
+    source: Mapped[Optional[str]] = mapped_column(String(20))
     # Raw Whisper output: {segments:[{start,end,text,words:[{word,start,end,probability}]}]}
     raw_json: Mapped[Optional[dict]] = mapped_column(JSONB)
     # After speaker turn merging: [{speaker,start_ms,end_ms,text}]

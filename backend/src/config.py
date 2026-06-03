@@ -39,8 +39,34 @@ class Settings(BaseSettings):
     pyannote_max_speakers: Optional[int] = None
     pyannote_use_title_speaker_hint: bool = False
 
+    # Diarization backend: "gpt" (text-based, no audio/pyannote) | "pyannote"
+    diarization_backend: str = "gpt"
+    diarization_gpt_model: str = "gpt-4o-transcribe-diarize"
+
     # Embedding backend
     embedding_backend: str = "openai"  # openai | bge-m3
+
+    # YouTube crawl (yt-dlp)
+    # Merged mp4 lets us run STT and reuse the file for clip export later.
+    youtube_format: str = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+    youtube_download_dir: str = "/tmp/vietsuccess_youtube"
+    youtube_fetch_thumbnail: bool = True
+
+    # YouTube caption (PRIMARY transcript source — saves Whisper API tokens).
+    # When True, YouTube videos try caption first; Whisper STT is the fallback.
+    caption_first: bool = True
+    caption_languages: str = "vi,en"          # comma-separated preference order
+    caption_segment_target_s: float = 10.0    # group short cues into ~Ns segments
+
+    # Phase 4 — summarization
+    summary_enabled: bool = True
+    summary_model: str = "gpt-4o-mini"
+    # Cap transcript chars sent to the LLM (keeps cost/context bounded for long videos)
+    summary_max_input_chars: int = 48000
+    # Per-topic-segment summaries (each retrievable chunk gets its topic summary)
+    topic_summary_enabled: bool = True
+    # Embed topic + video summaries into chunk_embeddings so they are searchable in RAG
+    summary_embed_enabled: bool = True
 
     # Audio
     audio_sample_rate: int = 16000
