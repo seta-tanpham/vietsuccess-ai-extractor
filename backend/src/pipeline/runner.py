@@ -11,8 +11,6 @@ Usage (CLI):
 from __future__ import annotations
 
 import logging
-import os
-import tempfile
 import time
 import uuid
 from pathlib import Path

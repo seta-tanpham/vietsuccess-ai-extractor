@@ -17,7 +17,7 @@ from src.pipeline.video_deduplication import (
     find_processed_duplicate,
     sha256_bytes,
 )
-from src.storage.minio_client import ensure_buckets, get_presigned_url, upload_file
+from src.storage.minio_client import ensure_buckets, upload_file
 
 router = APIRouter()
 
@@ -93,8 +93,8 @@ async def upload_video(file: UploadFile = File(...), db: Session = Depends(get_d
     object_key = f"{video_id}/raw{Path(file.filename or 'video.mp4').suffix}"
 
     # Upload to MinIO
-    import io
-    import tempfile, os
+    import tempfile
+    import os
     with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename or ".mp4").suffix) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
@@ -142,6 +142,15 @@ def get_video(video_id: uuid.UUID, db: Session = Depends(get_db)):
     transcript = db.query(Transcript).filter_by(video_id=canonical_id).first()
     speakers = db.query(Speaker).filter_by(video_id=canonical_id).all()
 
+    video_url = None
+    for asset in video.assets:
+        if asset.asset_type == "raw_video":
+            try:
+                from src.storage.minio_client import get_presigned_url
+                video_url = get_presigned_url(asset.minio_bucket, asset.object_key)
+            except Exception:
+                video_url = None
+
     return {
         "id": str(video.id),
         "canonical_video_id": str(canonical_id),
@@ -152,6 +161,7 @@ def get_video(video_id: uuid.UUID, db: Session = Depends(get_db)):
         "language": video.language,
         "created_at": video.created_at.isoformat(),
         "transcript_confidence": transcript.confidence if transcript else None,
+        "video_url": video_url,
         "speakers": [
             {
                 "id": str(s.id),
@@ -217,11 +227,31 @@ def reprocess(video_id: uuid.UUID, db: Session = Depends(get_db)):
 
 def _run_background(video_id: uuid.UUID) -> None:
     from src.database import SessionLocal
+    from src.pipeline.phase2 import run_phase2
+    from src.pipeline.phase3 import run_phase3
+    from src.models.video import Video
+    import logging
 
     def _task():
         db = SessionLocal()
         try:
+            logging.getLogger(__name__).info("[%s] Starting background pipeline Phase 1", video_id)
             run_phase1(video_id, db)
+
+            logging.getLogger(__name__).info("[%s] Starting background pipeline Phase 2", video_id)
+            run_phase2(video_id, db)
+
+            logging.getLogger(__name__).info("[%s] Starting background pipeline Phase 3", video_id)
+            run_phase3(video_id, db)
+        except Exception as exc:
+            logging.getLogger(__name__).exception("Full background pipeline failed for %s: %s", video_id, exc)
+            try:
+                video = db.get(Video, video_id)
+                if video:
+                    video.status = "error"
+                    db.commit()
+            except Exception:
+                db.rollback()
         finally:
             db.close()
 

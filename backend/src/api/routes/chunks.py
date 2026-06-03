@@ -119,14 +119,16 @@ def rechunk(video_id: uuid.UUID, db: Session = Depends(get_db)):
 def _run_background(video_id: uuid.UUID) -> None:
     from src.database import SessionLocal
     from src.pipeline.phase2 import run_phase2
+    from src.pipeline.phase3 import run_phase3
 
     def _task():
         db = SessionLocal()
         try:
             run_phase2(video_id, db)
+            run_phase3(video_id, db)
         except Exception as exc:
             import logging
-            logging.getLogger(__name__).exception("Phase 2 failed for %s: %s", video_id, exc)
+            logging.getLogger(__name__).exception("Phase 2 & 3 failed for %s: %s", video_id, exc)
         finally:
             db.close()
 

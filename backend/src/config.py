@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://nguyenthituyetmay:iloveyou044@localhost:5433/vietsuccess"
 
     # MinIO
-    minio_endpoint: str = "localhost:9100"
+    minio_endpoint: str = "localhost:9000"
     minio_root_user: str = "minioadmin"
     minio_root_password: str = "minioadmin123"
     minio_bucket_videos: str = "vietsuccess-videos"

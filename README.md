@@ -65,8 +65,8 @@ http://localhost:5500
 | API | `http://localhost:8000` |
 | API docs | `http://localhost:8000/docs` |
 | PostgreSQL | `localhost:5433` |
-| MinIO API | `localhost:9100` |
-| MinIO Console | `http://localhost:9101` |
+| MinIO API | `localhost:9000` |
+| MinIO Console | `http://localhost:9001` |
 
 Default MinIO login:
 

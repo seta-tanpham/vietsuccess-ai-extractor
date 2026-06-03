@@ -1,6 +1,5 @@
 from typing import Optional
 from minio import Minio
-from minio.error import S3Error
 
 from src.config import settings
 

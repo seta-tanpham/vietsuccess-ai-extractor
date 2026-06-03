@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -24,14 +23,13 @@ from src.models.chunk import Chunk
 from src.models.speaker import Speaker
 from src.models.transcript import Transcript
 from src.models.video import Video
-from src.pipeline.chunking.atomic import AtomicChunkData, build_atomic_chunks
+from src.pipeline.chunking.atomic import build_atomic_chunks
 from src.pipeline.chunking.quality import (
     check_semantic_chunk,
     check_timestamp_integrity,
     generate_qc_report,
 )
 from src.pipeline.chunking.semantic import (
-    SemanticChunkData,
     assign_segment_paths,
     build_semantic_chunks,
 )
@@ -125,9 +123,18 @@ def run_phase2(video_id: uuid.UUID, db: Session) -> dict:
             sem_text = " ".join(a.original_transcript for a in core_atomics).strip()
             sem_search = " ".join(a.search_text for a in core_atomics).strip()
 
+            # Find dominant speaker for this semantic chunk
+            sem_speakers = [a.speaker for a in core_atomics if getattr(a, 'speaker', None)]
+            dominant_speaker_id = None
+            if sem_speakers:
+                from collections import Counter
+                dominant_label = Counter(sem_speakers).most_common(1)[0][0]
+                dominant_speaker_id = speaker_map.get(dominant_label)
+
             sem_chunk = Chunk(
                 video_id=video_id,
                 parent_chunk_id=topic_chunk.id,
+                speaker_id=dominant_speaker_id,
                 chunk_type="semantic",
                 segment_path=sem_path,
                 start_ms=sem.start_ms,

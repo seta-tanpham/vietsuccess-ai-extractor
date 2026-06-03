@@ -33,7 +33,7 @@ from src.models.video import Video, VideoAsset
 from src.models.speaker import Speaker
 from src.pipeline.audio_normalization import normalize_audio
 from src.pipeline.diarization import align_transcript_with_diarization, diarize
-from src.pipeline.filler_cleaning import clean_text, compression_ratio
+from src.pipeline.filler_cleaning import clean_text
 from src.pipeline.speaker_merging import merge_speaker_turns
 from src.pipeline.transcription import transcribe
 from src.storage.minio_client import get_client, upload_file
@@ -320,7 +320,8 @@ def _step6_deduplicate_speakers(
     _tmp_dir = None
     try:
         if wav_asset:
-            import tempfile, os
+            import tempfile
+            import os
             _tmp_dir = tempfile.mkdtemp()
             wav_path = os.path.join(_tmp_dir, "audio.wav")
             get_client().fget_object(wav_asset.minio_bucket, wav_asset.object_key, wav_path)
