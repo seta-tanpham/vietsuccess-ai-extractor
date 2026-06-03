@@ -31,6 +31,10 @@ class Chunk(Base):
     end_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     original_transcript: Mapped[Optional[str]] = mapped_column(Text)
     search_text: Mapped[Optional[str]] = mapped_column(Text)
+    # Approx token count of search_text (size control for embedding/RAG)
+    token_count: Mapped[Optional[int]] = mapped_column(Integer)
+    # IDs of source transcript segments this chunk was built from (trace back to transcript)
+    segment_ids: Mapped[Optional[list]] = mapped_column(JSONB)
     is_low_quality: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     quality_fail_reasons: Mapped[Optional[list]] = mapped_column(JSONB)
     # Filled in later phases

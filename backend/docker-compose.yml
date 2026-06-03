@@ -3,8 +3,8 @@ services:
     image: pgvector/pgvector:pg16
     container_name: vietsuccess_postgres
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-nguyenthituyetmay}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-iloveyou044}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-vietsuccess}
     ports:
       - "5433:5432"

@@ -28,6 +28,10 @@ langfuse>=2.0.0
 # ── Audio processing ─────────────────────────────────────────────────────────
 ffmpeg-python>=0.2.0
 
+# ── YouTube crawl ────────────────────────────────────────────────────────────
+yt-dlp>=2024.8.6
+youtube-transcript-api>=1.0.0
+
 # ── Config & utilities ───────────────────────────────────────────────────────
 pydantic>=2.7.0
 pydantic-settings>=2.3.0

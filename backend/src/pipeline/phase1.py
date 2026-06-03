@@ -57,7 +57,8 @@ def run_phase1(video_id: uuid.UUID, db: Session) -> None:
         raise ValueError(f"Video {video_id} not found")
 
     try:
-        _step1_normalize(video, db)
+        # Audio is normalized on-demand (only when Whisper/pyannote actually need it),
+        # so a YouTube video served by caption + GPT diarization skips audio entirely.
         _step2_transcribe(video, db)
         _step3_diarize_and_merge(video, db)
         _step4_create_speakers(video, db)
@@ -73,10 +74,12 @@ def run_phase1(video_id: uuid.UUID, db: Session) -> None:
         raise
 
 
-# ── Step 1: Audio normalization ───────────────────────────────────────────────
+# ── Audio normalization (on-demand) ───────────────────────────────────────────
 
-def _step1_normalize(video: Video, db: Session) -> str:
-    # Idempotent: skip if audio_wav asset already exists
+def _ensure_audio(video: Video, db: Session) -> str:
+    """Normalize raw video → 16kHz mono WAV and store as audio_wav asset.
+    Idempotent and lazy: only the Whisper and pyannote paths call this, so the
+    caption + GPT-diarization path never downloads/normalizes audio."""
     existing = _find_asset(video, "audio_wav")
     if existing:
         log.info("[%s] audio_wav already exists, skipping normalization", video.id)
@@ -116,6 +119,9 @@ def _step1_normalize(video: Video, db: Session) -> str:
 # ── Step 2: Whisper transcription ────────────────────────────────────────────
 
 def _step2_transcribe(video: Video, db: Session) -> Transcript:
+    """Produce the raw transcript. For YouTube videos, the PRIMARY source is the
+    YouTube caption (no Whisper API tokens); Whisper STT is the fallback when no
+    caption exists. Upload videos always use Whisper."""
     # Idempotent: skip if transcript already exists
     existing = db.query(Transcript).filter_by(video_id=video.id).first()
     if existing and existing.raw_json:
@@ -124,31 +130,67 @@ def _step2_transcribe(video: Video, db: Session) -> Transcript:
 
     _set_status(db, video, "transcribing")
 
-    wav_asset = _find_asset(video, "audio_wav")
-    if not wav_asset:
-        raise RuntimeError("No audio_wav asset — run normalization first")
+    segments = None
+    source = provider = language = None
+    confidence = None
 
-    with tempfile.TemporaryDirectory() as tmp:
-        wav_path = os.path.join(tmp, "audio.wav")
-        get_client().fget_object(wav_asset.minio_bucket, wav_asset.object_key, wav_path)
+    # ── Primary: YouTube caption ──────────────────────────────────────────────
+    if settings.caption_first and video.source_type == "youtube" and video.youtube_video_id:
+        try:
+            from src.pipeline.youtube_caption import fetch_caption_segments
+            cap = fetch_caption_segments(video.youtube_video_id)
+        except Exception as exc:
+            log.warning("[%s] caption fetch error (falling back to STT): %s", video.id, exc)
+            cap = None
+        if cap and cap.get("segments"):
+            segments = cap["segments"]
+            language = cap.get("language")
+            source = "caption"
+            provider = "youtube_caption"
+            video.caption_available = True
+            if not video.default_language:
+                video.default_language = language
+            log.info("[%s] using YouTube caption (%s, %d segments) — skipping Whisper",
+                     video.id, language, len(segments))
 
-        result = transcribe(wav_path)
+    # ── Fallback: Whisper STT (normalize audio on demand) ─────────────────────
+    if segments is None:
+        _ensure_audio(video, db)
+        wav_asset = _find_asset(video, "audio_wav")
+        if not wav_asset:
+            raise RuntimeError("No audio_wav asset — normalization failed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            wav_path = os.path.join(tmp, "audio.wav")
+            get_client().fget_object(wav_asset.minio_bucket, wav_asset.object_key, wav_path)
+            result = transcribe(wav_path)
+
+        segments = result["segments"]
+        language = result.get("language")
+        confidence = result.get("confidence")
+        source = "stt"
+        provider = settings.whisper_model
+        if video.source_type == "youtube":
+            video.caption_available = False
+        log.info("[%s] transcribed via Whisper: %d segments", video.id, len(segments))
 
     # Clean search_text for each segment
-    segments = result["segments"]
     for seg in segments:
         seg["search_text"] = clean_text(seg.get("text", ""))
 
-    transcript = existing or Transcript(video_id=video.id, provider=settings.whisper_model)
-    transcript.raw_json = {"segments": segments, "language": result.get("language")}
-    transcript.confidence = result.get("confidence")
-    transcript.model_version = settings.whisper_model
-    transcript.language = result.get("language")
+    transcript = existing or Transcript(video_id=video.id, provider=provider)
+    transcript.provider = provider
+    transcript.source = source
+    transcript.raw_json = {"segments": segments, "language": language}
+    transcript.confidence = confidence
+    transcript.model_version = provider
+    transcript.language = language
 
     if not existing:
         db.add(transcript)
     db.commit()
-    log.info("[%s] transcribed %d segments, confidence=%.2f", video.id, len(segments), transcript.confidence or 0)
+    log.info("[%s] transcript ready: source=%s, %d segments, confidence=%s",
+             video.id, source, len(segments), f"{confidence:.2f}" if confidence else "n/a")
     return transcript
 
 
@@ -168,6 +210,7 @@ def _step3_diarize_and_merge(video: Video, db: Session) -> None:
     segments = transcript.raw_json.get("segments", [])
 
     if settings.diarization_backend == "gpt":
+        # Text-based diarization via GPT — no audio, no pyannote token needed.
         log.info("[%s] Running GPT-based diarization", video.id)
         turns = diarize_with_gpt(segments, video.title or video.original_filename or "")
     elif settings.diarization_backend == "pyannote" and settings.pyannote_auth_token:
@@ -185,6 +228,8 @@ def _step3_diarize_and_merge(video: Video, db: Session) -> None:
         else:
             log.info("[%s] Speaker count: auto-detect", video.id)
 
+        # pyannote needs the audio — ensure it exists (caption path skipped it).
+        _ensure_audio(video, db)
         wav_asset = _find_asset(video, "audio_wav")
         with tempfile.TemporaryDirectory() as tmp:
             wav_path = os.path.join(tmp, "audio.wav")

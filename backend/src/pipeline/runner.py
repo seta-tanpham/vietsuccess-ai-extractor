@@ -22,6 +22,7 @@ from src.models.video import Video, VideoAsset
 from src.pipeline.phase1 import run_phase1
 from src.pipeline.phase2 import run_phase2
 from src.pipeline.phase3 import run_phase3
+from src.pipeline.phase4 import run_phase4
 from src.storage.minio_client import ensure_buckets, upload_file
 
 log = logging.getLogger(__name__)
@@ -31,16 +32,16 @@ def ingest_video(
     file_path: str,
     db: Session,
     title: str | None = None,
-    run_phases: tuple[int, ...] = (1, 2, 3),
+    run_phases: tuple[int, ...] = (1, 2, 3, 4),
 ) -> dict:
     """
-    Full pipeline: register video → Phase 1 → Phase 2 → Phase 3.
+    Full pipeline: register video → Phase 1 → Phase 2 → Phase 3 → Phase 4.
 
     Args:
         file_path:   Local path to video file.
         db:          SQLAlchemy session.
         title:       Optional title. Defaults to filename.
-        run_phases:  Which phases to run. Default (1, 2, 3) = all.
+        run_phases:  Which phases to run. Default (1, 2, 3, 4) = all.
 
     Returns dict with video_id + per-phase timing + final QC report.
     """
@@ -85,6 +86,16 @@ def ingest_video(
     else:
         p3_result = {}
 
+    # ── Phase 4: Summary + topics ────────────────────────────────────────────
+    if 4 in run_phases:
+        t4 = time.perf_counter()
+        log.info("[Phase 4] Starting...")
+        p4_result = run_phase4(video_id, db)
+        timing["phase4_s"] = round(time.perf_counter() - t4, 1)
+        log.info("[Phase 4] Done in %.1fs", timing["phase4_s"])
+    else:
+        p4_result = {}
+
     total_s = round(time.perf_counter() - t0, 1)
     timing["total_s"] = total_s
 
@@ -98,6 +109,7 @@ def ingest_video(
         "timing": timing,
         "phase2": p2_result,
         "phase3": p3_result,
+        "phase4": p4_result,
     }
 
 

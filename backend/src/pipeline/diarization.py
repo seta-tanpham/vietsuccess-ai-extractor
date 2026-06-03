@@ -161,6 +161,8 @@ def _find_speaker(seg_start: int, seg_end: int, turns: list[dict]) -> str:
     return best_speaker
 
 
+# ── GPT-based diarization (text only — no audio, no pyannote) ──────────────────
+
 _DIARIZATION_SYSTEM_PROMPT = """You are analyzing a Vietnamese transcript to perform speaker diarization (labeling which speaker spoke each segment).
 
 Your task:
@@ -194,12 +196,13 @@ def diarize_with_gpt(
     video_title: str = "",
 ) -> list[dict[str, Any]]:
     """
-    Diarize Whisper segments using gpt-4o-transcribe-diarize, 
-    falling back to settings.openai_model if needed.
+    Diarize transcript segments using gpt-4o-transcribe-diarize,
+    falling back to settings.openai_model if needed. Works purely on text —
+    no audio file or pyannote token required.
     """
     import json
     from openai import OpenAI, APIError
-    
+
     if not settings.openai_api_key:
         log.warning("OPENAI_API_KEY not set — all segments assigned to SPEAKER_00.")
         return [
@@ -227,78 +230,58 @@ def diarize_with_gpt(
     )
 
     client = OpenAI(api_key=settings.openai_api_key)
-    
-    # Try calling the custom model first
+
     model_name = settings.diarization_gpt_model
     log.info("Requesting GPT-based diarization using model: %s", model_name)
-    
+
     content = None
-    try:
-        response = client.chat.completions.create(
-            model=model_name,
+
+    def _call(model: str, use_json: bool):
+        kwargs = dict(
+            model=model,
             messages=[
                 {"role": "system", "content": _DIARIZATION_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.1,
-            response_format={"type": "json_object"},
         )
-        content = response.choices[0].message.content
+        if use_json:
+            kwargs["response_format"] = {"type": "json_object"}
+        return client.chat.completions.create(**kwargs).choices[0].message.content
+
+    try:
+        content = _call(model_name, use_json=True)
     except APIError as e:
-        # Check if 404/NotFoundError or auth error, or permission issues
-        log.warning("Failed to call %s: %s. Falling back to %s", model_name, e, settings.openai_model)
+        # Some models reject response_format=json_object — retry without it, then fall back.
+        log.warning("Failed to call %s with json mode: %s. Falling back to %s", model_name, e, settings.openai_model)
         try:
-            response = client.chat.completions.create(
-                model=settings.openai_model,
-                messages=[
-                    {"role": "system", "content": _DIARIZATION_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.1,
-                response_format={"type": "json_object"},
-            )
-            content = response.choices[0].message.content
+            content = _call(settings.openai_model, use_json=True)
         except Exception as fallback_err:
             log.error("Fallback model %s also failed: %s", settings.openai_model, fallback_err)
     except Exception as e:
         log.warning("Unexpected error with %s: %s. Falling back to %s", model_name, e, settings.openai_model)
         try:
-            response = client.chat.completions.create(
-                model=settings.openai_model,
-                messages=[
-                    {"role": "system", "content": _DIARIZATION_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.1,
-                response_format={"type": "json_object"},
-            )
-            content = response.choices[0].message.content
+            content = _call(settings.openai_model, use_json=True)
         except Exception as fallback_err:
             log.error("Fallback model %s also failed: %s", settings.openai_model, fallback_err)
 
     speaker_map = {}
     if content:
         try:
-            data = json.loads(content)
-            speaker_map = data.get("speaker_map", {})
+            speaker_map = json.loads(content).get("speaker_map", {})
         except Exception as json_err:
             log.error("Failed to parse GPT diarization JSON response: %s", json_err)
 
-    # Convert mapping back to aligned turns
     aligned = []
     for i, seg in enumerate(whisper_segments):
-        # Retrieve speaker label, handle string or int keys in LLM output
         speaker = speaker_map.get(str(i)) or speaker_map.get(i) or "SPEAKER_00"
-        
-        # Ensure label matches format SPEAKER_XX
         if isinstance(speaker, str) and not speaker.startswith("SPEAKER_"):
             speaker = f"SPEAKER_{speaker}"
-            
         aligned.append({
             "speaker": speaker,
             "start_ms": int(seg.get("start", 0.0) * 1000),
             "end_ms": int(seg.get("end", 0.0) * 1000),
             "text": seg.get("text", "").strip(),
         })
-        
+
     return aligned
