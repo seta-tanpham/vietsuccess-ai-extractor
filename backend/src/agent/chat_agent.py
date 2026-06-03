@@ -8,7 +8,19 @@ from src.config import settings
 from src.pipeline.embedding import embed_query
 from src.models.speaker import Speaker
 from langchain_openai import ChatOpenAI
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, END
+from langfuse.langchain import CallbackHandler
+
+
+# Initialize Langfuse handler only if settings are provided
+langfuse_handler = None
+if settings.langfuse_public_key and settings.langfuse_secret_key:
+    langfuse_handler = CallbackHandler(
+        public_key=settings.langfuse_public_key,
+        secret_key=settings.langfuse_secret_key,
+        host=settings.langfuse_base_url
+    )
 
 
 class AgentState(TypedDict):
@@ -54,7 +66,7 @@ def fetch_speakers(state: AgentState):
     return {"detected_speakers": speakers_list}
 
 
-def parse_query(state: AgentState):
+def parse_query(state: AgentState, config: RunnableConfig = None):
     query = state.get("query", "")
     speakers = state.get("detected_speakers", [])
     
@@ -93,7 +105,7 @@ Respond ONLY with a JSON object in this format (no other text or codeblocks):
     )
     
     try:
-        response = llm.invoke(prompt)
+        response = llm.invoke(prompt, config=config)
         content = response.content.strip()
         # Clean markdown code blocks if any
         if content.startswith("```json"):
@@ -239,7 +251,7 @@ def retrieve_chunks(state: AgentState):
     return {"search_results": results}
 
 
-def generate_answer(state: AgentState):
+def generate_answer(state: AgentState, config: RunnableConfig = None):
     query = state.get("query")
     results = state.get("search_results", [])
     speaker_name = state.get("speaker_name")
@@ -268,15 +280,14 @@ User Query: "{query}"
 Here are the search results from the video transcript:
 {context_str}
 
-Respond in Vietnamese. Your response must:
-1. Directly answer the user's question.
-2. For each relevant point or section mentioned, specify the exact timestamp range (e.g. [02:15 - 04:30] or [01:05:12 - 01:07:45]) and state who is speaking.
-3. Provide a concise summary of what was said.
-4. Keep the answer structured, well-formatted, and easy to read.
+Respond in Vietnamese. Your response must follow these strict guidelines to provide a high-quality, direct, and extremely concise answer:
 
-If the user asked specifically about speaker "{speaker_name or ''}" but the results only contain statements from other speakers, mention that you couldn't find statements by "{speaker_name}" on this topic, but point out what other speakers said instead.
-
-Keep the response concise, engaging, and professional.
+1. DO NOT output dry segment-by-segment dumps, structures like "Segment 1:", "Thời gian:", "Người nói:", "Tóm tắt:", or conversational filler paragraphs (e.g. "Đầu tiên...", "Tiếp theo...", "Cuối cùng...", "Những chia sẻ này giúp...").
+2. Write a synthesized, direct response. Start immediately with a 1-sentence introduction stating who is speaking and the overall timestamp range in square brackets (e.g. "Nghệ thuật thảo luận về tiền bạc với cha mẹ được chị Thái Vân Linh chia sẻ chi tiết từ [23:25 - 26:04]. Để cuộc trò chuyện diễn ra khéo léo và hiệu quả, chị gợi ý hai bí quyết sau:").
+3. Present the key points directly using clean bullet points with bold titles (e.g. "- **Sử dụng người thứ ba để mở lời**: [2-3 sentences max summarizing this point]").
+4. Every timestamp range MUST be in square brackets `[MM:SS]` or `[HH:MM:SS]` (e.g., [23:25 - 26:04], [24:15]) so they can be parsed into interactive click-to-seek buttons. Do not use parentheses for timestamps.
+5. Keep the content extremely concise and high-density. Avoid wordy explanations, repetitions, or fluff. Stop writing immediately after the bullet points (do not write any wrap-up or conclusion sentence at the end).
+6. If the user asked specifically about speaker "{speaker_name or ''}" but the results only contain statements from other speakers, mention that you couldn't find statements by "{speaker_name}" on this topic, but point out what other speakers said instead.
 """
     
     llm = ChatOpenAI(
@@ -285,7 +296,7 @@ Keep the response concise, engaging, and professional.
         temperature=0.3
     )
     
-    response = llm.invoke(prompt)
+    response = llm.invoke(prompt, config=config)
     return {"answer": response.content.strip()}
 
 
@@ -321,7 +332,11 @@ def run_chat_agent(db: Session, query: str, video_id: Optional[uuid.UUID] = None
         "answer": ""
     }
     
-    result = agent.invoke(initial_state)
+    config = {}
+    if langfuse_handler:
+        config["callbacks"] = [langfuse_handler]
+        
+    result = agent.invoke(initial_state, config=config)
     return {
         "answer": result["answer"],
         "search_results": result["search_results"]

@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     openai_embedding_model: str = "text-embedding-3-small"
 
+    # Langfuse
+    langfuse_secret_key: str = ""
+    langfuse_public_key: str = ""
+    langfuse_base_url: str = "https://us.cloud.langfuse.com"
+
     # Pipeline - Whisper
     # Backend: auto | mlx | faster-whisper
     # "auto" picks mlx on Apple Silicon, faster-whisper elsewhere
@@ -38,6 +43,9 @@ class Settings(BaseSettings):
     pyannote_min_speakers: Optional[int] = None
     pyannote_max_speakers: Optional[int] = None
     pyannote_use_title_speaker_hint: bool = False
+
+    diarization_backend: str = "gpt"  # gpt | pyannote
+    diarization_gpt_model: str = "gpt-4o-transcribe-diarize"
 
     # Embedding backend
     embedding_backend: str = "openai"  # openai | bge-m3
