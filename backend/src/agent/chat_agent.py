@@ -11,6 +11,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, END
 from langfuse.langchain import CallbackHandler
+from langfuse import propagate_attributes
 
 
 # Initialize Langfuse handler only if settings are provided
@@ -27,6 +28,7 @@ class AgentState(TypedDict):
     query: str
     video_id: Optional[uuid.UUID]
     db: Session
+    intent: Optional[str]
     speaker_id: Optional[uuid.UUID]
     speaker_name: Optional[str]
     search_topic: Optional[str]
@@ -71,30 +73,37 @@ def parse_query(state: AgentState, config: RunnableConfig = None):
     speakers = state.get("detected_speakers", [])
     
     if not speakers:
-        return {"speaker_id": None, "speaker_name": None, "search_topic": query}
-        
-    speakers_list_str = "\n".join([
-        f"- ID: {s['id']}, Name: {s['display_name']} ({s['diarization_label']}), Role: {s['role']}"
-        for s in speakers
-    ])
+        speakers_list_str = "(No speakers available in this video)"
+    else:
+        speakers_list_str = "\n".join([
+            f"- ID: {s['id']}, Name: {s['display_name']} ({s['diarization_label']}), Role: {s['role']}"
+            for s in speakers
+        ])
     
-    prompt = f"""You are analyzing a user query to see if they are asking about what a specific speaker in the video said.
+    prompt = f"""You are analyzing a user query for a Vietnamese video assistant.
+Your task is to classify the user's intent and extract search parameters if applicable.
+
+User Query: "{query}"
 
 List of speakers in the video:
 {speakers_list_str}
 
-User Query: "{query}"
-
 Analyze the query:
-1. Does the query refer to a specific speaker from the list (e.g. "Khánh", "Thuỳ Minh", "anh A", "SPEAKER_01", "khách mời", etc.)? Match flexibly.
-2. Extract the topic or question they are asking (e.g. "cách vượt qua áp lực", "lời khuyên học tiếng Anh").
+1. "intent": Classify the query as:
+   - "chitchat": if the query is a greeting, general introduction, question about you, thank you, or general casual talk unrelated to searching specific moments/content of the video.
+   - "search": if the query is asking about the video's content, specific topics discussed, speakers, timestamps, or asking to summarize/find a moment in the video.
+2. "speaker_matched": (Only if intent is "search" and speakers list is not empty) True if the query refers to a specific speaker from the list (e.g. "Khánh", "Thuỳ Minh", "chị Linh", "SPEAKER_01", "khách mời", etc., matching flexibly). Otherwise False.
+3. "speaker_id": The matched speaker's UUID (string) or null.
+4. "speaker_name": The display name of the matched speaker or null.
+5. "search_topic": (Only if intent is "search") The extracted topic keywords or query to search for (e.g., "thảo luận tiền bạc", "vượt qua áp lực").
 
-Respond ONLY with a JSON object in this format (no other text or codeblocks):
+Respond ONLY with a JSON object in this format (no other text or markdown codeblocks):
 {{
+  "intent": "chitchat" or "search",
   "speaker_matched": true or false,
   "speaker_id": "matched speaker UUID (string) or null",
   "speaker_name": "display name of the matched speaker or null",
-  "search_topic": "extracted topic query"
+  "search_topic": "extracted search query or null"
 }}
 """
     
@@ -120,13 +129,19 @@ Respond ONLY with a JSON object in this format (no other text or codeblocks):
             sp_id = uuid.UUID(data["speaker_id"])
             
         return {
+            "intent": data.get("intent", "search"),
             "speaker_id": sp_id,
             "speaker_name": data.get("speaker_name") if sp_id else None,
             "search_topic": data.get("search_topic") or query
         }
     except Exception:
-        # Fallback to original query
-        return {"speaker_id": None, "speaker_name": None, "search_topic": query}
+        # Fallback to search
+        return {
+            "intent": "search",
+            "speaker_id": None,
+            "speaker_name": None,
+            "search_topic": query
+        }
 
 
 def retrieve_chunks(state: AgentState):
@@ -300,7 +315,34 @@ Respond in Vietnamese. Your response must follow these strict guidelines to prov
     return {"answer": response.content.strip()}
 
 
+def generate_chitchat(state: AgentState, config: RunnableConfig = None):
+    query = state.get("query")
+    
+    prompt = f"""You are Antigravity, the VietSuccess Content AI Agent.
+The user is talking to you casually or asking a general question (chitchat).
+Respond friendly, concisely, and professionally in Vietnamese. 
+
+User query: "{query}"
+
+Answer:"""
+    
+    llm = ChatOpenAI(
+        api_key=settings.openai_api_key,
+        model=settings.openai_model,
+        temperature=0.7
+    )
+    
+    response = llm.invoke(prompt, config=config)
+    return {"answer": response.content.strip()}
+
+
 # ── Graph Construction ─────────────────────────────────────────────────────────
+
+def route_intent(state: AgentState):
+    if state.get("intent") == "chitchat":
+        return "chitchat"
+    return "search"
+
 
 workflow = StateGraph(AgentState)
 
@@ -308,22 +350,39 @@ workflow.add_node("fetch_speakers", fetch_speakers)
 workflow.add_node("parse_query", parse_query)
 workflow.add_node("retrieve_chunks", retrieve_chunks)
 workflow.add_node("generate_answer", generate_answer)
+workflow.add_node("generate_chitchat", generate_chitchat)
 
 workflow.set_entry_point("fetch_speakers")
 workflow.add_edge("fetch_speakers", "parse_query")
-workflow.add_edge("parse_query", "retrieve_chunks")
+
+workflow.add_conditional_edges(
+    "parse_query",
+    route_intent,
+    {
+        "chitchat": "generate_chitchat",
+        "search": "retrieve_chunks"
+    }
+)
+
 workflow.add_edge("retrieve_chunks", "generate_answer")
 workflow.add_edge("generate_answer", END)
+workflow.add_edge("generate_chitchat", END)
 
 agent = workflow.compile()
 
 
-def run_chat_agent(db: Session, query: str, video_id: Optional[uuid.UUID] = None) -> dict:
+def run_chat_agent(
+    db: Session,
+    query: str,
+    video_id: Optional[uuid.UUID] = None,
+    session_id: Optional[str] = None
+) -> dict:
     """Run the LangGraph agent synchronously and return results."""
     initial_state = {
         "query": query,
         "video_id": video_id,
         "db": db,
+        "intent": None,
         "speaker_id": None,
         "speaker_name": None,
         "search_topic": None,
@@ -336,7 +395,12 @@ def run_chat_agent(db: Session, query: str, video_id: Optional[uuid.UUID] = None
     if langfuse_handler:
         config["callbacks"] = [langfuse_handler]
         
-    result = agent.invoke(initial_state, config=config)
+    if session_id and langfuse_handler:
+        with propagate_attributes(session_id=str(session_id)):
+            result = agent.invoke(initial_state, config=config)
+    else:
+        result = agent.invoke(initial_state, config=config)
+        
     return {
         "answer": result["answer"],
         "search_results": result["search_results"]

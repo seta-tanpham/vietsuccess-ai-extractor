@@ -13,6 +13,7 @@ router = APIRouter()
 class AgentChatRequest(BaseModel):
     query: str
     video_id: Optional[uuid.UUID] = None
+    session_id: Optional[str] = None
 
 
 @router.post("/chat")
@@ -21,7 +22,12 @@ def chat_agent_endpoint(req: AgentChatRequest, db: Session = Depends(get_db)):
         raise HTTPException(400, "Query cannot be empty")
 
     try:
-        result = run_chat_agent(db=db, query=req.query, video_id=req.video_id)
+        result = run_chat_agent(
+            db=db,
+            query=req.query,
+            video_id=req.video_id,
+            session_id=req.session_id
+        )
         return {
             "content": result["answer"],
             "results": result["search_results"]
