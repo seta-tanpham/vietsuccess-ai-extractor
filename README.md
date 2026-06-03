@@ -25,34 +25,6 @@ Video upload
 └── frontend/    Static Alpine.js + Tailwind UI
 ```
 
-## Pipeline
-
-### Phase 1: Transcription + Speaker Turns
-
-- Normalizes audio with `ffmpeg`
-- Transcribes with configurable Whisper backend:
-  - `openai`: OpenAI Whisper API
-  - `mlx`: fast local Apple Silicon backend via Metal
-  - `faster-whisper`: local CPU fallback
-- Aligns transcript into speaker turns
-- Suggests speaker names and roles where possible
-
-### Phase 2: Chunking + Quality
-
-Chunking is rule-based custom code, not a separate LLM model.
-
-- `atomic`: sentence-level or short speaker-turn chunks
-- `semantic`: 45-90 second searchable chunks with overlap
-- `topic_segment`: chapter-like containers grouping semantic chunks
-- Quality gates mark bad semantic chunks before embedding
-
-### Phase 3: Embeddings + Search
-
-- Embeds only good `semantic` chunks
-- Default embedding model: `text-embedding-3-small`
-- Stores vectors in PostgreSQL with `pgvector`
-- Builds HNSW vector index for retrieval
-
 ## Requirements
 
 - Docker Desktop
