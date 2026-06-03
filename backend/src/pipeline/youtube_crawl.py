@@ -62,12 +62,17 @@ def _ydl_opts(dest_dir: Optional[str] = None, download: bool = False) -> dict[st
         "no_warnings": True,
         "noplaylist": True,
         "skip_download": not download,
+        # Anti-bot: space out metadata requests a little.
+        "sleep_interval_requests": settings.youtube_sleep_requests_s,
     }
     if download:
         opts.update({
             "format": settings.youtube_format,
             "merge_output_format": "mp4",
             "outtmpl": str(Path(dest_dir) / "%(id)s.%(ext)s"),
+            # Anti-bot: random pause in [sleep_interval, max_sleep_interval] before download.
+            "sleep_interval": settings.youtube_sleep_interval_s,
+            "max_sleep_interval": settings.youtube_max_sleep_interval_s,
         })
     return opts
 

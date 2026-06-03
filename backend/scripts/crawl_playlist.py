@@ -19,6 +19,7 @@ Tip: point at the right DB explicitly if needed:
 """
 import argparse
 import logging
+import random
 import sys
 import time
 from pathlib import Path
@@ -81,6 +82,10 @@ def main():
     parser.add_argument("playlist_url", help="YouTube playlist URL (or any video URL with ?list=...)")
     parser.add_argument("--limit", type=int, default=None, help="Only process the first N videos")
     parser.add_argument("--reprocess", action="store_true", help="Re-run pipeline even on already-ready videos")
+    parser.add_argument("--rest-min", type=float, default=settings.crawl_rest_min_s,
+                        help="Min seconds to rest between videos (anti-bot)")
+    parser.add_argument("--rest-max", type=float, default=settings.crawl_rest_max_s,
+                        help="Max seconds to rest between videos (anti-bot)")
     args = parser.parse_args()
 
     print("=" * 70)
@@ -107,6 +112,7 @@ def main():
         log.info("=" * 70)
         log.info("[%d/%d] %s  (%s)", i, len(videos), (v.get("title") or "")[:60], v["id"])
         log.info("=" * 70)
+        result = "failed"
         try:
             result = process_one(db, v["url"], args.reprocess)
             stats[result] += 1
@@ -115,6 +121,13 @@ def main():
             stats["failed"] += 1
         finally:
             db.close()
+
+        # Anti-bot rest between videos: only after one that actually hit YouTube
+        # (skip the wait for already-ready videos and after the last video).
+        if i < len(videos) and result != "skipped":
+            rest = random.uniform(min(args.rest_min, args.rest_max), max(args.rest_min, args.rest_max))
+            log.info("  ⏸ resting %.0fs before next video (anti-bot)...", rest)
+            time.sleep(rest)
 
     print("\n" + "=" * 70)
     print(f"PLAYLIST DONE in {time.perf_counter() - t0:.0f}s — "

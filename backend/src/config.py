@@ -52,6 +52,16 @@ class Settings(BaseSettings):
     youtube_download_dir: str = "/tmp/vietsuccess_youtube"
     youtube_fetch_thumbnail: bool = True
 
+    # Anti-bot throttling.
+    # yt-dlp sleeps a random amount in [sleep_interval, max_sleep_interval] before each
+    # download, and sleep_interval_requests seconds between metadata requests.
+    youtube_sleep_interval_s: float = 1.0
+    youtube_max_sleep_interval_s: float = 5.0
+    youtube_sleep_requests_s: float = 0.75
+    # Rest a random amount in [crawl_rest_min_s, crawl_rest_max_s] between videos in a playlist.
+    crawl_rest_min_s: float = 20.0
+    crawl_rest_max_s: float = 45.0
+
     # YouTube caption (PRIMARY transcript source — saves Whisper API tokens).
     # When True, YouTube videos try caption first; Whisper STT is the fallback.
     caption_first: bool = True
