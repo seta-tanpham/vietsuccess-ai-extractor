@@ -23,8 +23,8 @@
               text: '#020381',
               muted: '#4F6882',
               faint: '#8AA9C5',
-              green: '#0693E3',
-              green2: '#E8F5FE',
+              green: '#020381',
+              green2: '#EEF0FF',
               teal: '#020381',
               gold: '#B47A20',
               coral: '#C45A3D'
@@ -51,7 +51,7 @@
     ::-webkit-scrollbar { width: 8px; height: 8px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #D3E7F6; border-radius: 999px; }
-    ::-webkit-scrollbar-thumb:hover { background: #0693E3; }
+    ::-webkit-scrollbar-thumb:hover { background: #020381; }
 
     input, textarea, select {
       width: 100%;
@@ -72,8 +72,8 @@
       padding: 10px;
     }
     .prompt-box:focus-within {
-      border-color: #0693E3;
-      box-shadow: 0 18px 50px rgba(2, 3, 129, 0.08), 0 0 0 4px rgba(6, 147, 227, .12);
+      border-color: #020381;
+      box-shadow: 0 18px 50px rgba(2, 3, 129, 0.08), 0 0 0 4px rgba(2, 3, 129, .12);
     }
     .prompt-input {
       border: 0;
@@ -110,8 +110,8 @@
     }
     select { padding: 9px 12px; }
     input:focus, textarea:focus, select:focus {
-      border-color: #0693E3;
-      box-shadow: 0 0 0 3px rgba(6, 147, 227, .16);
+      border-color: #020381;
+      box-shadow: 0 0 0 3px rgba(2, 3, 129, .16);
     }
     input::placeholder, textarea::placeholder { color: #8AA9C5; }
 
@@ -129,10 +129,10 @@
       color: #020381;
       transition: background .15s, transform .15s, border-color .15s;
     }
-    .icon-btn:hover { background: #F3F8FC; border-color: #8ED1FC; }
+    .icon-btn:hover { background: #F3F8FC; border-color: #020381; }
     .primary {
       display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-      background: linear-gradient(135deg, #020381 0%, #0693E3 100%);
+      background: #020381;
       color: #FFFFFF;
       border-radius: 10px;
       font-weight: 700;
@@ -166,7 +166,7 @@
       color: #020381;
       transition: background .15s, color .15s;
     }
-    .sidebar-icon-btn:hover { background: #F3F8FC; color: #0693E3; }
+    .sidebar-icon-btn:hover { background: #F3F8FC; color: #020381; }
     .sidebar-nav-item {
       width: 100%;
       min-height: 44px;
@@ -279,7 +279,7 @@
       padding: 12px;
       transition: border-color .15s, background .15s;
     }
-    .result-card:hover { border-color: #0693E3; background: #FFFFFF; }
+    .result-card:hover { border-color: #020381; background: #FFFFFF; }
     .badge {
       display: inline-flex; align-items: center;
       border-radius: 999px;
@@ -1046,7 +1046,7 @@ function app() {
 
     statusBadge(status) {
       const map = {
-        ready: ['#EAF7FF', '#0693E3', 'Ready'],
+        ready: ['#EEF0FF', '#020381', 'Ready'],
         uploaded: ['#E7F0FA', '#0E5FA8', 'Uploaded'],
         normalizing: ['#FFF3D8', '#B47A20', 'Normalizing'],
         transcribing: ['#FFF3D8', '#B47A20', 'Transcribing'],
