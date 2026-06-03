@@ -86,8 +86,8 @@ uvicorn src.api.main:app --reload
 | FastAPI | `http://localhost:8000` |
 | Swagger docs | `http://localhost:8000/docs` |
 | PostgreSQL | `localhost:5433` |
-| MinIO API | `localhost:9100` |
-| MinIO Console | `http://localhost:9101` |
+| MinIO API | `localhost:9000` |
+| MinIO Console | `http://localhost:9001` |
 
 MinIO default credentials:
 
@@ -229,7 +229,7 @@ Key `.env` values:
 
 ```env
 DATABASE_URL=postgresql://nguyenthituyetmay:iloveyou044@localhost:5433/vietsuccess
-MINIO_ENDPOINT=localhost:9100
+MINIO_ENDPOINT=localhost:9000
 
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o-mini

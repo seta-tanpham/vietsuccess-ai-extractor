@@ -233,7 +233,6 @@ def _find_duplicates_by_embedding(
     Pairs above threshold → merge the smaller one into the larger.
     """
     import numpy as np
-    import torch
     from pyannote.audio import Inference, Model
 
     # Load pyannote's speaker embedding model

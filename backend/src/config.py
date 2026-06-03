@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://nguyenthituyetmay:iloveyou044@localhost:5433/vietsuccess"
 
     # MinIO
-    minio_endpoint: str = "localhost:9100"
+    minio_endpoint: str = "localhost:9000"
     minio_root_user: str = "minioadmin"
     minio_root_password: str = "minioadmin123"
     minio_bucket_videos: str = "vietsuccess-videos"
@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
     openai_embedding_model: str = "text-embedding-3-small"
+
+    # Langfuse
+    langfuse_secret_key: str = ""
+    langfuse_public_key: str = ""
+    langfuse_base_url: str = "https://us.cloud.langfuse.com"
 
     # Pipeline - Whisper
     # Backend: auto | mlx | faster-whisper

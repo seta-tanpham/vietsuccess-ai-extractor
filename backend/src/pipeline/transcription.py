@@ -17,7 +17,9 @@ def transcribe(wav_path: str) -> dict[str, Any]:
     if backend == "auto":
         backend = _detect_best_backend()
 
-    if backend == "mlx":
+    if backend == "openai":
+        return _transcribe_openai(wav_path)
+    elif backend == "mlx":
         return _transcribe_mlx(wav_path)
     return _transcribe_faster_whisper(wav_path)
 
@@ -131,6 +133,148 @@ def _transcribe_faster_whisper(wav_path: str) -> dict[str, Any]:
         "backend": "faster-whisper",
         "compute_type": settings.whisper_compute_type,
     }
+
+
+# ── OpenAI Whisper API ─────────────────────────────────────────────────────────
+
+def _split_wav_ffmpeg(wav_path: str, temp_dir: str, segment_time_sec: int = 600) -> list[str]:
+    import subprocess
+    import glob
+    import os
+    chunk_pattern = os.path.join(temp_dir, "chunk_%03d.wav")
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", wav_path,
+        "-f", "segment",
+        "-segment_time", str(segment_time_sec),
+        "-c", "copy",
+        chunk_pattern
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return sorted(glob.glob(os.path.join(temp_dir, "chunk_*.wav")))
+
+
+def _get_wav_duration_seconds(file_path: str) -> float:
+    import os
+    # 16kHz, 16-bit (2 bytes) mono PCM WAV has 44 bytes header and 32000 bytes/sec
+    size = os.path.getsize(file_path)
+    if size <= 44:
+        return 0.0
+    return (size - 44) / 32000.0
+
+
+def _transcribe_openai(wav_path: str) -> dict[str, Any]:
+    from openai import OpenAI
+    import logging
+    import os
+    import tempfile
+    from concurrent.futures import ThreadPoolExecutor
+
+    log = logging.getLogger(__name__)
+    log.info("Transcribing via OpenAI Whisper API: %s", wav_path)
+
+    client = OpenAI(api_key=settings.openai_api_key)
+    file_size = os.path.getsize(wav_path)
+    max_bytes = 24 * 1024 * 1024  # 24 MB
+
+    if file_size <= max_bytes:
+        with open(wav_path, "rb") as f:
+            response = client.audio.transcriptions.create(
+                file=f,
+                model="whisper-1",
+                response_format="verbose_json",
+                timestamp_granularities=["word", "segment"]
+            )
+
+        if hasattr(response, "model_dump"):
+            data = response.model_dump()
+        else:
+            data = dict(response)
+    else:
+        log.info("File size (%d bytes) exceeds 24MB. Splitting and transcribing in parallel...", file_size)
+        
+        data = {
+            "text": "",
+            "segments": [],
+            "words": []
+        }
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            chunks = _split_wav_ffmpeg(wav_path, temp_dir, segment_time_sec=600)
+            num_chunks = len(chunks)
+            log.info("Split WAV into %d chunk(s)", num_chunks)
+            
+            # Calculate offsets upfront
+            offsets = []
+            current_offset = 0.0
+            for chunk_path in chunks:
+                offsets.append(current_offset)
+                current_offset += _get_wav_duration_seconds(chunk_path)
+            
+            # Define worker function for parallel transcription
+            def transcribe_chunk(idx: int, chunk_path: str) -> tuple[int, dict]:
+                log.info("Starting transcription for chunk %d/%d: %s", idx + 1, num_chunks, chunk_path)
+                with open(chunk_path, "rb") as f:
+                    resp = client.audio.transcriptions.create(
+                        file=f,
+                        model="whisper-1",
+                        response_format="verbose_json",
+                        timestamp_granularities=["word", "segment"]
+                    )
+                log.info("Completed transcription for chunk %d/%d", idx + 1, num_chunks)
+                if hasattr(resp, "model_dump"):
+                    return idx, resp.model_dump()
+                return idx, dict(resp)
+            
+            # Execute in parallel threads
+            with ThreadPoolExecutor(max_workers=num_chunks) as executor:
+                futures = [executor.submit(transcribe_chunk, idx, path) for idx, path in enumerate(chunks)]
+                results = [f.result() for f in futures]
+            
+            # Sort by index to maintain correct chronological order
+            results.sort(key=lambda x: x[0])
+            chunk_data_list = [r[1] for r in results]
+            
+            # Merge results
+            segment_id_counter = 0
+            for i, chunk_data in enumerate(chunk_data_list):
+                offset_seconds = offsets[i]
+                
+                # Append text
+                if data["text"]:
+                    data["text"] += " " + chunk_data.get("text", "").strip()
+                else:
+                    data["text"] = chunk_data.get("text", "").strip()
+                
+                # Process words
+                chunk_words = chunk_data.get("words") or []
+                for w in chunk_words:
+                    w["start"] = w["start"] + offset_seconds
+                    w["end"] = w["end"] + offset_seconds
+                    data["words"].append(w)
+                
+                # Process segments
+                chunk_segments = chunk_data.get("segments") or []
+                for seg in chunk_segments:
+                    seg["id"] = segment_id_counter
+                    segment_id_counter += 1
+                    seg["start"] = seg["start"] + offset_seconds
+                    seg["end"] = seg["end"] + offset_seconds
+                    data["segments"].append(seg)
+
+    # Group top-level words into segments
+    words = data.get("words", [])
+    segments = data.get("segments")
+    if words and segments:
+        for seg in segments:
+            seg_start = seg.get("start", 0.0)
+            seg_end = seg.get("end", 0.0)
+            seg["words"] = [
+                w for w in words
+                if seg_start - 0.05 <= w.get("start", 0.0) <= seg_end + 0.05
+            ]
+
+    return _normalize_openai_result(data, backend="openai", model="whisper-1")
 
 
 # ── Shared normalizer for openai-style result (mlx returns openai format) ─────

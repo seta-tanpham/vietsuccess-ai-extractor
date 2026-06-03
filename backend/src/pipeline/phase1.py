@@ -33,7 +33,7 @@ from src.models.video import Video, VideoAsset
 from src.models.speaker import Speaker
 from src.pipeline.audio_normalization import normalize_audio
 from src.pipeline.diarization import align_transcript_with_diarization, diarize, diarize_with_gpt
-from src.pipeline.filler_cleaning import clean_text, compression_ratio
+from src.pipeline.filler_cleaning import clean_text
 from src.pipeline.speaker_merging import merge_speaker_turns
 from src.pipeline.transcription import transcribe
 from src.storage.minio_client import get_client, upload_file
@@ -213,7 +213,7 @@ def _step3_diarize_and_merge(video: Video, db: Session) -> None:
         # Text-based diarization via GPT — no audio, no pyannote token needed.
         log.info("[%s] Running GPT-based diarization", video.id)
         turns = diarize_with_gpt(segments, video.title or video.original_filename or "")
-    elif settings.pyannote_auth_token:
+    elif settings.diarization_backend == "pyannote" and settings.pyannote_auth_token:
         num_spk = settings.pyannote_num_speakers
         min_spk = settings.pyannote_min_speakers
         max_spk = settings.pyannote_max_speakers
@@ -245,16 +245,22 @@ def _step3_diarize_and_merge(video: Video, db: Session) -> None:
         log.info("[%s] diarized %d raw turns, %d unique speakers",
                  video.id, len(raw_turns), len({t["speaker"] for t in raw_turns}))
     else:
-        log.warning(
-            "[%s] PYANNOTE_AUTH_TOKEN not set — all segments assigned to SPEAKER_00. "
-            "To get real speaker detection:\n"
-            "  1. Accept: https://hf.co/pyannote/speaker-diarization-3.1\n"
-            "  2. Accept: https://hf.co/pyannote/segmentation-3.0\n"
-            "  3. Token:  https://hf.co/settings/tokens\n"
-            "  4. .env:   PYANNOTE_AUTH_TOKEN=hf_xxxx\n"
-            "  5. Re-run: python scripts/run_pipeline.py --id %s --phases 1",
-            video.id, video.id,
-        )
+        if settings.diarization_backend == "pyannote":
+            log.warning(
+                "[%s] PYANNOTE_AUTH_TOKEN not set — all segments assigned to SPEAKER_00. "
+                "To get real speaker detection:\n"
+                "  1. Accept: https://hf.co/pyannote/speaker-diarization-3.1\n"
+                "  2. Accept: https://hf.co/pyannote/segmentation-3.0\n"
+                "  3. Token:  https://hf.co/settings/tokens\n"
+                "  4. .env:   PYANNOTE_AUTH_TOKEN=hf_xxxx\n"
+                "  5. Re-run: python scripts/run_pipeline.py --id %s --phases 1",
+                video.id, video.id,
+            )
+        else:
+            log.warning(
+                "[%s] Unknown or unconfigured diarization backend %r (or missing token) — all segments assigned to SPEAKER_00",
+                video.id, settings.diarization_backend
+            )
         turns = [
             {
                 "speaker": "SPEAKER_00",
@@ -368,7 +374,8 @@ def _step6_deduplicate_speakers(
     _tmp_dir = None
     try:
         if wav_asset:
-            import tempfile, os
+            import tempfile
+            import os
             _tmp_dir = tempfile.mkdtemp()
             wav_path = os.path.join(_tmp_dir, "audio.wav")
             get_client().fget_object(wav_asset.minio_bucket, wav_asset.object_key, wav_path)

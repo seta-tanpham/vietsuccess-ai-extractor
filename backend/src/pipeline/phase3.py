@@ -87,7 +87,6 @@ def _embed_video_chunks(video_id: uuid.UUID, db: Session) -> dict:
 
     # Batch embed
     texts = [c.search_text or c.original_transcript or "" for c in to_embed]
-    from src.config import settings
     vectors, cost_info = embed_texts(texts, batch_size=_EMBED_BATCH_SIZE)
 
     # Persist embeddings
